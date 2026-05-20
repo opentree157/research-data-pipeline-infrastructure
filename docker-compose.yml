@@ -21,11 +21,13 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pipeline}:${POSTGRES_PASSWORD:-pipeline}@db:5432/${POSTGRES_DB:-sensor_data}
       ROLLING_WINDOW_SIZE: ${ROLLING_WINDOW_SIZE:-20}
       ANOMALY_THRESHOLD: ${ANOMALY_THRESHOLD:-2.0}
+      API_ROOT_PATH: ${API_ROOT_PATH:-/api}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -40,6 +42,11 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 volumes:
   pgdata:
