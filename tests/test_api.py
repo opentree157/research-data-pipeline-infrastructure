@@ -26,7 +26,7 @@ def test_ingest_csv(client):
     assert r.status_code == 200
     data = r.json()
     assert data["readings_ingested"] == 11
-    assert data["processing"] is True
+    assert "job_id" in data
 
 
 def test_get_anomalies_empty(client):
@@ -51,6 +51,27 @@ def test_filter_by_sensor_id(client):
     assert r.json() == []
 
 
+def test_filter_by_date_range(client):
+    client.post("/ingest", files={"file": ("data.csv", SAMPLE_CSV, "text/csv")})
+    r = client.get("/anomalies", params={
+        "start": "2024-01-01T00:40:00Z",
+        "end": "2024-01-01T01:00:00Z",
+    })
+    assert r.status_code == 200
+    anomalies = r.json()
+    assert all(a["reading"]["sensor_id"] == "TEMP_001" for a in anomalies)
+
+
+def test_filter_by_date_range_excludes(client):
+    client.post("/ingest", files={"file": ("data.csv", SAMPLE_CSV, "text/csv")})
+    r = client.get("/anomalies", params={
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-02T00:00:00Z",
+    })
+    assert r.status_code == 200
+    assert r.json() == []
+
+
 def test_sensors_list(client):
     client.post("/ingest", files={"file": ("data.csv", SAMPLE_CSV, "text/csv")})
     r = client.get("/sensors")
@@ -65,3 +86,56 @@ def test_readings_endpoint(client):
     data = r.json()
     assert len(data) == 5
     assert all(d["sensor_id"] == "TEMP_001" for d in data)
+
+
+# --- Job status tests ---
+
+def test_job_status_after_ingest(client):
+    r = client.post("/ingest", files={"file": ("data.csv", SAMPLE_CSV, "text/csv")})
+    job_id = r.json()["job_id"]
+    r = client.get(f"/jobs/{job_id}")
+    assert r.status_code == 200
+    job = r.json()
+    assert job["status"] == "completed"
+    assert job["anomalies_found"] >= 1
+    assert job["readings_count"] == 11
+
+
+def test_job_not_found(client):
+    r = client.get("/jobs/99999")
+    assert r.status_code == 404
+
+
+# --- Validation / error tests ---
+
+def test_ingest_missing_columns(client):
+    bad_csv = "timestamp,sensor_id\n2024-01-01T00:00:00Z,S1\n"
+    r = client.post("/ingest", files={"file": ("bad.csv", bad_csv, "text/csv")})
+    assert r.status_code == 400
+    assert "Missing required columns" in r.json()["detail"]
+
+
+def test_ingest_bad_timestamp(client):
+    bad_csv = "id,timestamp,sensor_id,temperature,humidity,pressure,location\n1,not-a-date,S1,22.0,45.0,1013.0,lab\n"
+    r = client.post("/ingest", files={"file": ("bad.csv", bad_csv, "text/csv")})
+    assert r.status_code == 400
+    assert "row 2" in r.json()["detail"]
+
+
+def test_ingest_bad_numeric(client):
+    bad_csv = "id,timestamp,sensor_id,temperature,humidity,pressure,location\n1,2024-01-01T00:00:00Z,S1,abc,45.0,1013.0,lab\n"
+    r = client.post("/ingest", files={"file": ("bad.csv", bad_csv, "text/csv")})
+    assert r.status_code == 400
+    assert "row 2" in r.json()["detail"]
+
+
+def test_ingest_empty_file(client):
+    r = client.post("/ingest", files={"file": ("empty.csv", "", "text/csv")})
+    assert r.status_code == 400
+
+
+def test_ingest_headers_only(client):
+    headers_only = "id,timestamp,sensor_id,temperature,humidity,pressure,location\n"
+    r = client.post("/ingest", files={"file": ("h.csv", headers_only, "text/csv")})
+    assert r.status_code == 400
+    assert "no data rows" in r.json()["detail"]
