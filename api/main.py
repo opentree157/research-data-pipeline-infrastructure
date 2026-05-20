@@ -1,19 +1,27 @@
 import logging
 import os
+import traceback
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from anomaly_detector import detect_anomalies
+from config import ALLOWED_ORIGINS, API_ROOT_PATH
 from database import SessionLocal, get_db
-from ingest import ingest_csv
-from models import Anomaly, SensorReading
-from schemas import AnomalyDetail, HealthResponse, IngestResponse, SensorReadingOut
+from ingest import ValidationError, ingest_csv
+from models import Anomaly, ProcessingJob, SensorReading
+from schemas import (
+    AnomalyDetail,
+    HealthResponse,
+    IngestResponse,
+    JobStatusResponse,
+    SensorReadingOut,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,21 +45,36 @@ app = FastAPI(
     title="Research Data Pipeline",
     version="1.0.0",
     lifespan=lifespan,
-    root_path="/api",
+    root_path=API_ROOT_PATH,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-def _run_detection(reading_ids: list[int]):
+def _run_detection(job_id: int, reading_ids: list[int]):
     db = SessionLocal()
     try:
-        detect_anomalies(db, reading_ids)
+        count = detect_anomalies(db, reading_ids)
+        job = db.get(ProcessingJob, job_id)
+        job.status = "completed"
+        job.anomalies_found = count
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception:
+        logger.exception("Anomaly detection failed for job %d", job_id)
+        try:
+            job = db.get(ProcessingJob, job_id)
+            job.status = "failed"
+            job.error = traceback.format_exc()[-500:]
+            job.completed_at = datetime.now(timezone.utc)
+            db.commit()
+        except Exception:
+            logger.exception("Failed to update job %d status", job_id)
     finally:
         db.close()
 
@@ -61,14 +84,16 @@ def health_check(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         db_status = "connected"
+        readings_count = db.query(SensorReading).count()
+        anomalies_count = db.query(Anomaly).count()
     except Exception:
         db_status = "disconnected"
+        readings_count = 0
+        anomalies_count = 0
 
-    readings_count = db.query(SensorReading).count()
-    anomalies_count = db.query(Anomaly).count()
-
+    status = "healthy" if db_status == "connected" else "degraded"
     return HealthResponse(
-        status="healthy",
+        status=status,
         database=db_status,
         readings_count=readings_count,
         anomalies_count=anomalies_count,
@@ -81,14 +106,32 @@ async def ingest_data(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    content = (await file.read()).decode("utf-8")
-    reading_ids = ingest_csv(db, content)
-    background_tasks.add_task(_run_detection, reading_ids)
-    return IngestResponse(
-        readings_ingested=len(reading_ids),
-        anomalies_detected=0,
-        processing=True,
-    )
+    raw = await file.read()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File is not valid UTF-8")
+
+    try:
+        reading_ids = ingest_csv(db, content)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    job = ProcessingJob(status="pending", readings_count=len(reading_ids))
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    background_tasks.add_task(_run_detection, job.id, reading_ids)
+    return IngestResponse(readings_ingested=len(reading_ids), job_id=job.id)
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ProcessingJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.get("/anomalies", response_model=list[AnomalyDetail])
@@ -100,7 +143,11 @@ def get_anomalies(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Anomaly).join(SensorReading)
+    query = (
+        db.query(Anomaly)
+        .join(SensorReading)
+        .options(joinedload(Anomaly.reading))
+    )
 
     if start:
         query = query.filter(SensorReading.timestamp >= start)
@@ -109,7 +156,7 @@ def get_anomalies(
     if sensor_id:
         query = query.filter(SensorReading.sensor_id == sensor_id)
 
-    query = query.order_by(Anomaly.detected_at.desc())
+    query = query.order_by(Anomaly.detected_at.desc(), Anomaly.id.desc())
     return query.offset(offset).limit(limit).all()
 
 

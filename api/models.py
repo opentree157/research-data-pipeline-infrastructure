@@ -5,6 +5,8 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship
@@ -29,6 +31,9 @@ class SensorReading(Base):
 
 class Anomaly(Base):
     __tablename__ = "anomalies"
+    __table_args__ = (
+        UniqueConstraint("sensor_data_id", "anomaly_type", name="uq_anomaly_reading_type"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     sensor_data_id = Column(
@@ -39,3 +44,15 @@ class Anomaly(Base):
     detected_at = Column(DateTime(timezone=True), server_default=func.now())
 
     reading = relationship("SensorReading", back_populates="anomalies")
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    status = Column(String(20), nullable=False, default="pending")
+    readings_count = Column(Integer, nullable=False)
+    anomalies_found = Column(Integer)
+    error = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))

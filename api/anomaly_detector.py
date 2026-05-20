@@ -1,15 +1,18 @@
 """
 Anomaly detection for sensor data.
 Flags readings >2 standard deviations from a rolling mean.
-Adapted from the provided reference implementation to work with SQLAlchemy models.
+
+Each run fetches the prior ROLLING_WINDOW_SIZE readings per sensor from the
+database so that rolling statistics are correct across ingest boundaries.
+Only newly ingested readings are evaluated for anomalies.
 """
 
 import logging
 from datetime import datetime, timezone
 from typing import List
 
-import numpy as np
 import pandas as pd
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from config import ANOMALY_THRESHOLD, ROLLING_WINDOW_SIZE
@@ -20,16 +23,41 @@ logger = logging.getLogger(__name__)
 METRICS = ["temperature", "humidity", "pressure"]
 
 
-def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
-    readings = (
+def _fetch_with_history(
+    db: Session, reading_ids: List[int]
+) -> tuple[pd.DataFrame, set[int]]:
+    new_readings = (
         db.query(SensorReading)
         .filter(SensorReading.id.in_(reading_ids))
-        .order_by(SensorReading.sensor_id, SensorReading.timestamp)
         .all()
     )
-    if not readings:
-        return 0
+    if not new_readings:
+        return pd.DataFrame(), set()
 
+    new_id_set = set(reading_ids)
+    sensor_ids = {r.sensor_id for r in new_readings}
+
+    history = []
+    for sid in sensor_ids:
+        earliest_new = min(
+            r.timestamp for r in new_readings if r.sensor_id == sid
+        )
+        prior = (
+            db.query(SensorReading)
+            .filter(
+                and_(
+                    SensorReading.sensor_id == sid,
+                    SensorReading.timestamp < earliest_new,
+                    ~SensorReading.id.in_(reading_ids),
+                )
+            )
+            .order_by(SensorReading.timestamp.desc())
+            .limit(ROLLING_WINDOW_SIZE)
+            .all()
+        )
+        history.extend(prior)
+
+    all_readings = history + new_readings
     rows = [
         {
             "id": r.id,
@@ -39,11 +67,18 @@ def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
             "humidity": r.humidity,
             "pressure": r.pressure,
         }
-        for r in readings
+        for r in all_readings
     ]
-    df = pd.DataFrame(rows).sort_values(["sensor_id", "timestamp"])
+    df = pd.DataFrame(rows).sort_values(["sensor_id", "timestamp"]).reset_index(drop=True)
+    return df, new_id_set
 
-    anomalies: list[Anomaly] = []
+
+def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
+    df, new_id_set = _fetch_with_history(db, reading_ids)
+    if df.empty:
+        return 0
+
+    anomaly_rows: list[dict] = []
 
     for sensor_id, sensor_df in df.groupby("sensor_id"):
         for metric in METRICS:
@@ -56,22 +91,47 @@ def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
 
             z_scores = (sensor_df[metric] - rolling_mean) / rolling_std
 
-            for idx in sensor_df[z_scores.abs() > ANOMALY_THRESHOLD].index:
-                z = z_scores.loc[idx]
-                if pd.isna(z):
+            for idx in sensor_df.index:
+                row_id = int(sensor_df.loc[idx, "id"])
+                if row_id not in new_id_set:
                     continue
-                anomalies.append(
-                    Anomaly(
-                        sensor_data_id=int(sensor_df.loc[idx, "id"]),
-                        anomaly_type=f"{metric}_anomaly",
-                        confidence_score=round(float(abs(z)), 4),
-                        detected_at=datetime.now(timezone.utc),
-                    )
+                z = z_scores.loc[idx]
+                if pd.isna(z) or abs(z) <= ANOMALY_THRESHOLD:
+                    continue
+                anomaly_rows.append(
+                    {
+                        "sensor_data_id": row_id,
+                        "anomaly_type": f"{metric}_anomaly",
+                        "confidence_score": round(float(abs(z)), 4),
+                        "detected_at": datetime.now(timezone.utc),
+                    }
                 )
 
-    if anomalies:
-        db.bulk_save_objects(anomalies)
-        db.commit()
+    if not anomaly_rows:
+        logger.info("Detected 0 anomalies in %d readings", len(new_id_set))
+        return 0
 
-    logger.info("Detected %d anomalies in %d readings", len(anomalies), len(readings))
-    return len(anomalies)
+    dialect = db.bind.dialect.name if db.bind else "default"
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(Anomaly).on_conflict_do_nothing(
+            index_elements=["sensor_data_id", "anomaly_type"]
+        )
+        db.execute(stmt, anomaly_rows)
+    else:
+        for row in anomaly_rows:
+            exists = (
+                db.query(Anomaly)
+                .filter_by(
+                    sensor_data_id=row["sensor_data_id"],
+                    anomaly_type=row["anomaly_type"],
+                )
+                .first()
+            )
+            if not exists:
+                db.add(Anomaly(**row))
+    db.commit()
+
+    logger.info("Detected %d anomalies in %d readings", len(anomaly_rows), len(new_id_set))
+    return len(anomaly_rows)
