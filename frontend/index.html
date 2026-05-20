@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sensor Anomaly Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f7fa; color: #333; }
+    header { background: #1a2332; color: #fff; padding: 1.25rem 2rem; }
+    header h1 { font-size: 1.4rem; font-weight: 600; }
+    .status { font-size: 0.85rem; color: #8fa4b8; margin-top: 0.25rem; }
+    .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+    .dot.ok { background: #34d399; }
+    .dot.err { background: #f87171; }
+    .container { max-width: 1200px; margin: 1.5rem auto; padding: 0 1.5rem; }
+    .filters { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; align-items: end; }
+    .filters label { display: flex; flex-direction: column; font-size: 0.8rem; font-weight: 500; color: #555; }
+    .filters input, .filters select { margin-top: 0.25rem; padding: 0.45rem 0.6rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem; }
+    .filters button { padding: 0.5rem 1.2rem; border: none; border-radius: 6px; font-size: 0.9rem; cursor: pointer; font-weight: 500; }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-upload { background: #8b5cf6; color: #fff; }
+    .btn-upload:hover { background: #7c3aed; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th { background: #f8fafc; text-align: left; padding: 0.7rem 1rem; font-weight: 600; color: #475569; border-bottom: 2px solid #e2e8f0; }
+    td { padding: 0.6rem 1rem; border-bottom: 1px solid #f1f5f9; }
+    tr:hover td { background: #f8fafc; }
+    .confidence { font-weight: 600; }
+    .confidence.high { color: #dc2626; }
+    .confidence.medium { color: #f59e0b; }
+    .confidence.low { color: #22c55e; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 500; }
+    .badge.temp { background: #fee2e2; color: #991b1b; }
+    .badge.humid { background: #dbeafe; color: #1e3a8a; }
+    .badge.press { background: #fef3c7; color: #92400e; }
+    .empty { text-align: center; padding: 3rem; color: #94a3b8; }
+    .upload-area { margin-bottom: 1.25rem; display: flex; gap: 0.75rem; align-items: center; }
+    .upload-area input[type="file"] { font-size: 0.85rem; }
+    .upload-msg { font-size: 0.85rem; margin-left: 0.5rem; }
+    .upload-msg.ok { color: #16a34a; }
+    .upload-msg.err { color: #dc2626; }
+    .pagination { display: flex; justify-content: center; gap: 0.5rem; margin-top: 1rem; padding-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sensor Anomaly Dashboard</h1>
+    <div class="status" id="status">Connecting...</div>
+  </header>
+
+  <div class="container">
+    <div class="upload-area">
+      <input type="file" id="csvFile" accept=".csv">
+      <button class="btn-upload" onclick="uploadCSV()">Upload CSV</button>
+      <span id="uploadMsg"></span>
+    </div>
+
+    <div class="filters">
+      <label>Start Date
+        <input type="datetime-local" id="startDate">
+      </label>
+      <label>End Date
+        <input type="datetime-local" id="endDate">
+      </label>
+      <label>Sensor
+        <select id="sensorSelect"><option value="">All Sensors</option></select>
+      </label>
+      <button class="btn-primary" onclick="loadAnomalies()">Filter</button>
+      <button class="btn-secondary" onclick="clearFilters()">Clear</button>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Sensor</th>
+            <th>Location</th>
+            <th>Type</th>
+            <th>Temp (&deg;C)</th>
+            <th>Humidity (%)</th>
+            <th>Pressure (hPa)</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody id="anomalyBody">
+          <tr><td colspan="8" class="empty">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <button class="btn-secondary" id="prevBtn" onclick="prevPage()" disabled>&laquo; Prev</button>
+      <span id="pageInfo" style="line-height:2.2;font-size:0.85rem;color:#64748b;"></span>
+      <button class="btn-secondary" id="nextBtn" onclick="nextPage()">Next &raquo;</button>
+    </div>
+  </div>
+
+<script>
+const PAGE_SIZE = 50;
+let currentOffset = 0;
+
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    document.getElementById('status').innerHTML =
+      `<span class="dot ok"></span> ${d.database} &mdash; ${d.readings_count.toLocaleString()} readings, ${d.anomalies_count.toLocaleString()} anomalies`;
+  } catch {
+    document.getElementById('status').innerHTML = '<span class="dot err"></span> API unreachable';
+  }
+}
+
+async function loadSensors() {
+  try {
+    const r = await fetch('/api/sensors');
+    const sensors = await r.json();
+    const sel = document.getElementById('sensorSelect');
+    sensors.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s; opt.textContent = s;
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+async function loadAnomalies() {
+  const params = new URLSearchParams();
+  const start = document.getElementById('startDate').value;
+  const end = document.getElementById('endDate').value;
+  const sensor = document.getElementById('sensorSelect').value;
+
+  if (start) params.set('start', new Date(start).toISOString());
+  if (end) params.set('end', new Date(end).toISOString());
+  if (sensor) params.set('sensor_id', sensor);
+  params.set('limit', PAGE_SIZE);
+  params.set('offset', currentOffset);
+
+  const body = document.getElementById('anomalyBody');
+  try {
+    const r = await fetch('/api/anomalies?' + params);
+    const data = await r.json();
+
+    if (!data.length) {
+      body.innerHTML = '<tr><td colspan="8" class="empty">No anomalies found</td></tr>';
+      updatePagination(0);
+      return;
+    }
+
+    body.innerHTML = data.map(a => {
+      const ts = new Date(a.reading.timestamp).toLocaleString();
+      const conf = a.confidence_score;
+      const cls = conf > 4 ? 'high' : conf > 2.5 ? 'medium' : 'low';
+      const typeCls = a.anomaly_type.startsWith('temp') ? 'temp' : a.anomaly_type.startsWith('humid') ? 'humid' : 'press';
+      const label = a.anomaly_type.replace('_anomaly', '').replace('_', ' ');
+      return `<tr>
+        <td>${ts}</td>
+        <td>${a.reading.sensor_id}</td>
+        <td>${a.reading.location}</td>
+        <td><span class="badge ${typeCls}">${label}</span></td>
+        <td>${a.reading.temperature.toFixed(1)}</td>
+        <td>${a.reading.humidity.toFixed(1)}</td>
+        <td>${a.reading.pressure.toFixed(2)}</td>
+        <td><span class="confidence ${cls}">${conf.toFixed(2)}&sigma;</span></td>
+      </tr>`;
+    }).join('');
+
+    updatePagination(data.length);
+  } catch {
+    body.innerHTML = '<tr><td colspan="8" class="empty">Error loading data</td></tr>';
+  }
+}
+
+function updatePagination(count) {
+  const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
+  document.getElementById('pageInfo').textContent = `Page ${page}`;
+  document.getElementById('prevBtn').disabled = currentOffset === 0;
+  document.getElementById('nextBtn').disabled = count < PAGE_SIZE;
+}
+
+function prevPage() { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadAnomalies(); }
+function nextPage() { currentOffset += PAGE_SIZE; loadAnomalies(); }
+
+function clearFilters() {
+  document.getElementById('startDate').value = '';
+  document.getElementById('endDate').value = '';
+  document.getElementById('sensorSelect').value = '';
+  currentOffset = 0;
+  loadAnomalies();
+}
+
+async function uploadCSV() {
+  const fileInput = document.getElementById('csvFile');
+  const msg = document.getElementById('uploadMsg');
+  if (!fileInput.files.length) { msg.textContent = 'Select a file first'; msg.className = 'upload-msg err'; return; }
+
+  msg.textContent = 'Uploading...'; msg.className = 'upload-msg';
+  const form = new FormData();
+  form.append('file', fileInput.files[0]);
+
+  try {
+    const r = await fetch('/api/ingest', { method: 'POST', body: form });
+    const d = await r.json();
+    msg.textContent = `Ingested ${d.readings_ingested} readings — anomaly detection running in background`;
+    msg.className = 'upload-msg ok';
+    setTimeout(() => { checkHealth(); loadSensors(); loadAnomalies(); }, 2000);
+  } catch {
+    msg.textContent = 'Upload failed'; msg.className = 'upload-msg err';
+  }
+}
+
+checkHealth();
+loadSensors();
+loadAnomalies();
+</script>
+</body>
+</html>
