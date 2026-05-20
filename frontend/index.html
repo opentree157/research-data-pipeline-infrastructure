@@ -68,7 +68,7 @@
       <label>Sensor
         <select id="sensorSelect"><option value="">All Sensors</option></select>
       </label>
-      <button class="btn-primary" onclick="loadAnomalies()">Filter</button>
+      <button class="btn-primary" onclick="applyFilters()">Filter</button>
       <button class="btn-secondary" onclick="clearFilters()">Clear</button>
     </div>
 
@@ -102,28 +102,99 @@
 const PAGE_SIZE = 50;
 let currentOffset = 0;
 
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function setStatus(ok, text) {
+  const el = document.getElementById('status');
+  el.textContent = '';
+  const dot = document.createElement('span');
+  dot.className = 'dot ' + (ok ? 'ok' : 'err');
+  el.appendChild(dot);
+  el.appendChild(document.createTextNode(' ' + text));
+}
+
 async function checkHealth() {
   try {
     const r = await fetch('/api/health');
+    if (!r.ok) { setStatus(false, 'API error'); return; }
     const d = await r.json();
-    document.getElementById('status').innerHTML =
-      `<span class="dot ok"></span> ${d.database} &mdash; ${d.readings_count.toLocaleString()} readings, ${d.anomalies_count.toLocaleString()} anomalies`;
+    setStatus(
+      d.database === 'connected',
+      d.database + ' — ' + d.readings_count.toLocaleString() + ' readings, ' + d.anomalies_count.toLocaleString() + ' anomalies'
+    );
   } catch {
-    document.getElementById('status').innerHTML = '<span class="dot err"></span> API unreachable';
+    setStatus(false, 'API unreachable');
   }
 }
 
 async function loadSensors() {
   try {
     const r = await fetch('/api/sensors');
+    if (!r.ok) return;
     const sensors = await r.json();
     const sel = document.getElementById('sensorSelect');
+    const current = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
     sensors.forEach(s => {
       const opt = document.createElement('option');
-      opt.value = s; opt.textContent = s;
+      opt.value = s;
+      opt.textContent = s;
       sel.appendChild(opt);
     });
+    sel.value = current;
   } catch {}
+}
+
+function showEmpty(msg) {
+  const body = document.getElementById('anomalyBody');
+  body.textContent = '';
+  const tr = document.createElement('tr');
+  const td = document.createElement('td');
+  td.colSpan = 8;
+  td.className = 'empty';
+  td.textContent = msg;
+  tr.appendChild(td);
+  body.appendChild(tr);
+}
+
+function buildRow(a) {
+  const tr = document.createElement('tr');
+  const cells = [
+    new Date(a.reading.timestamp).toLocaleString(),
+    a.reading.sensor_id,
+    a.reading.location,
+    null,
+    a.reading.temperature.toFixed(1),
+    a.reading.humidity.toFixed(1),
+    a.reading.pressure.toFixed(2),
+    null,
+  ];
+
+  cells.forEach((text, i) => {
+    const td = document.createElement('td');
+    if (i === 3) {
+      const span = document.createElement('span');
+      const typeCls = a.anomaly_type.startsWith('temp') ? 'temp' : a.anomaly_type.startsWith('humid') ? 'humid' : 'press';
+      span.className = 'badge ' + typeCls;
+      span.textContent = a.anomaly_type.replace('_anomaly', '').replace('_', ' ');
+      td.appendChild(span);
+    } else if (i === 7) {
+      const span = document.createElement('span');
+      const conf = a.confidence_score;
+      const cls = conf > 4 ? 'high' : conf > 2.5 ? 'medium' : 'low';
+      span.className = 'confidence ' + cls;
+      span.textContent = conf.toFixed(2) + 'σ';
+      td.appendChild(span);
+    } else {
+      td.textContent = text;
+    }
+    tr.appendChild(td);
+  });
+  return tr;
 }
 
 async function loadAnomalies() {
@@ -138,50 +209,34 @@ async function loadAnomalies() {
   params.set('limit', PAGE_SIZE);
   params.set('offset', currentOffset);
 
-  const body = document.getElementById('anomalyBody');
   try {
     const r = await fetch('/api/anomalies?' + params);
+    if (!r.ok) { showEmpty('Error loading data'); updatePagination(0); return; }
     const data = await r.json();
 
-    if (!data.length) {
-      body.innerHTML = '<tr><td colspan="8" class="empty">No anomalies found</td></tr>';
-      updatePagination(0);
-      return;
-    }
+    if (!data.length) { showEmpty('No anomalies found'); updatePagination(0); return; }
 
-    body.innerHTML = data.map(a => {
-      const ts = new Date(a.reading.timestamp).toLocaleString();
-      const conf = a.confidence_score;
-      const cls = conf > 4 ? 'high' : conf > 2.5 ? 'medium' : 'low';
-      const typeCls = a.anomaly_type.startsWith('temp') ? 'temp' : a.anomaly_type.startsWith('humid') ? 'humid' : 'press';
-      const label = a.anomaly_type.replace('_anomaly', '').replace('_', ' ');
-      return `<tr>
-        <td>${ts}</td>
-        <td>${a.reading.sensor_id}</td>
-        <td>${a.reading.location}</td>
-        <td><span class="badge ${typeCls}">${label}</span></td>
-        <td>${a.reading.temperature.toFixed(1)}</td>
-        <td>${a.reading.humidity.toFixed(1)}</td>
-        <td>${a.reading.pressure.toFixed(2)}</td>
-        <td><span class="confidence ${cls}">${conf.toFixed(2)}&sigma;</span></td>
-      </tr>`;
-    }).join('');
-
+    const body = document.getElementById('anomalyBody');
+    body.textContent = '';
+    data.forEach(a => body.appendChild(buildRow(a)));
     updatePagination(data.length);
   } catch {
-    body.innerHTML = '<tr><td colspan="8" class="empty">Error loading data</td></tr>';
+    showEmpty('Error loading data');
+    updatePagination(0);
   }
 }
 
 function updatePagination(count) {
   const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
-  document.getElementById('pageInfo').textContent = `Page ${page}`;
+  document.getElementById('pageInfo').textContent = 'Page ' + page;
   document.getElementById('prevBtn').disabled = currentOffset === 0;
   document.getElementById('nextBtn').disabled = count < PAGE_SIZE;
 }
 
 function prevPage() { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadAnomalies(); }
 function nextPage() { currentOffset += PAGE_SIZE; loadAnomalies(); }
+
+function applyFilters() { currentOffset = 0; loadAnomalies(); }
 
 function clearFilters() {
   document.getElementById('startDate').value = '';
@@ -202,13 +257,43 @@ async function uploadCSV() {
 
   try {
     const r = await fetch('/api/ingest', { method: 'POST', body: form });
+    if (!r.ok) {
+      const err = await r.json().catch(() => null);
+      msg.textContent = err?.detail || 'Upload failed (HTTP ' + r.status + ')';
+      msg.className = 'upload-msg err';
+      return;
+    }
     const d = await r.json();
-    msg.textContent = `Ingested ${d.readings_ingested} readings — anomaly detection running in background`;
+    msg.textContent = 'Ingested ' + d.readings_ingested + ' readings — detecting anomalies...';
     msg.className = 'upload-msg ok';
-    setTimeout(() => { checkHealth(); loadSensors(); loadAnomalies(); }, 2000);
+    loadSensors();
+    pollJob(d.job_id);
   } catch {
     msg.textContent = 'Upload failed'; msg.className = 'upload-msg err';
   }
+}
+
+function pollJob(jobId) {
+  const msg = document.getElementById('uploadMsg');
+  const interval = setInterval(async () => {
+    try {
+      const r = await fetch('/api/jobs/' + jobId);
+      if (!r.ok) { clearInterval(interval); return; }
+      const job = await r.json();
+      if (job.status === 'completed') {
+        clearInterval(interval);
+        msg.textContent = 'Done — ' + job.anomalies_found + ' anomalies detected';
+        msg.className = 'upload-msg ok';
+        checkHealth();
+        currentOffset = 0;
+        loadAnomalies();
+      } else if (job.status === 'failed') {
+        clearInterval(interval);
+        msg.textContent = 'Detection failed: ' + (job.error || 'unknown error');
+        msg.className = 'upload-msg err';
+      }
+    } catch { clearInterval(interval); }
+  }, 1000);
 }
 
 checkHealth();
