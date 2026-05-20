@@ -151,6 +151,12 @@ activemq-data/
 .env
 .envrc
 .venv
+
+# Test artifacts
+test.db
+
+# Generated data
+*.csv
 env/
 venv/
 ENV/
