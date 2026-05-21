@@ -32,23 +32,27 @@ def test_ingest_csv(client):
 def test_get_anomalies_empty(client):
     r = client.get("/anomalies")
     assert r.status_code == 200
-    assert r.json() == []
+    data = r.json()
+    assert data["items"] == []
+    assert data["total"] == 0
 
 
 def test_ingest_then_query_anomalies(client):
     client.post("/ingest", files={"file": ("data.csv", SAMPLE_CSV, "text/csv")})
     r = client.get("/anomalies")
     assert r.status_code == 200
-    anomalies = r.json()
-    assert len(anomalies) >= 1
-    assert anomalies[0]["reading"]["sensor_id"] == "TEMP_001"
+    data = r.json()
+    assert len(data["items"]) >= 1
+    assert data["total"] >= 1
+    assert data["items"][0]["reading"]["sensor_id"] == "TEMP_001"
 
 
 def test_filter_by_sensor_id(client):
     client.post("/ingest", files={"file": ("data.csv", SAMPLE_CSV, "text/csv")})
     r = client.get("/anomalies", params={"sensor_id": "NONEXISTENT"})
     assert r.status_code == 200
-    assert r.json() == []
+    assert r.json()["items"] == []
+    assert r.json()["total"] == 0
 
 
 def test_filter_by_date_range(client):
@@ -58,8 +62,8 @@ def test_filter_by_date_range(client):
         "end": "2024-01-01T01:00:00Z",
     })
     assert r.status_code == 200
-    anomalies = r.json()
-    assert all(a["reading"]["sensor_id"] == "TEMP_001" for a in anomalies)
+    data = r.json()
+    assert all(a["reading"]["sensor_id"] == "TEMP_001" for a in data["items"])
 
 
 def test_filter_by_date_range_excludes(client):
@@ -69,7 +73,8 @@ def test_filter_by_date_range_excludes(client):
         "end": "2025-01-02T00:00:00Z",
     })
     assert r.status_code == 200
-    assert r.json() == []
+    assert r.json()["items"] == []
+    assert r.json()["total"] == 0
 
 
 def test_sensors_list(client):

@@ -20,6 +20,7 @@ from schemas import (
     HealthResponse,
     IngestResponse,
     JobStatusResponse,
+    PaginatedAnomalies,
     SensorReadingOut,
 )
 
@@ -134,7 +135,7 @@ def get_job_status(job_id: int, db: Session = Depends(get_db)):
     return job
 
 
-@app.get("/anomalies", response_model=list[AnomalyDetail])
+@app.get("/anomalies", response_model=PaginatedAnomalies)
 def get_anomalies(
     start: Optional[datetime] = Query(None, description="Start datetime (ISO 8601)"),
     end: Optional[datetime] = Query(None, description="End datetime (ISO 8601)"),
@@ -156,8 +157,9 @@ def get_anomalies(
     if sensor_id:
         query = query.filter(SensorReading.sensor_id == sensor_id)
 
-    query = query.order_by(Anomaly.detected_at.desc(), Anomaly.id.desc())
-    return query.offset(offset).limit(limit).all()
+    total = query.count()
+    items = query.order_by(Anomaly.detected_at.desc(), Anomaly.id.desc()).offset(offset).limit(limit).all()
+    return PaginatedAnomalies(items=items, total=total, limit=limit, offset=offset)
 
 
 @app.get("/sensors", response_model=list[str])

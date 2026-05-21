@@ -44,6 +44,13 @@ class JobStatusResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaginatedAnomalies(BaseModel):
+    items: list[AnomalyDetail]
+    total: int
+    limit: int
+    offset: int
+
+
 class HealthResponse(BaseModel):
     status: str
     database: str
