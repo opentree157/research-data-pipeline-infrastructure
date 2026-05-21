@@ -139,17 +139,19 @@ The test suite will refuse to run if `DATABASE_URL` points to a PostgreSQL datab
 
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and PR to `main`:
 
-| Job       | Trigger               | What it does                                                        |
-|-----------|-----------------------|---------------------------------------------------------------------|
-| **test**  | Every push and PR     | Runs test suite against SQLite and a PostgreSQL service container    |
-| **build** | Every push and PR     | Builds API and nginx Docker images; pushes to GHCR on merge to main |
-| **deploy**| Merge to main only    | SSHs into the production host, pulls new images, restarts services  |
+| Job       | PR opened/updated               | PR merged to main                                     |
+|-----------|----------------------------------|-------------------------------------------------------|
+| **test**  | Runs unit + integration tests    | Runs unit + integration tests                         |
+| **build** | Builds images (validates Docker) | Builds and pushes images to GHCR                      |
+| **deploy**| Skipped                          | SSHs into production host, pulls images, restarts     |
+
+On a PR, the build job validates that the Dockerfiles compile but does not push images. On merge to main, it pushes SHA-tagged and `latest` images to GHCR and then deploys.
 
 **Deploy is gated on configuration.** It only runs when `DEPLOY_HOST` is set as a repository variable. To enable it:
 
 1. Create a GitHub environment named `production`
 2. Set repository variables: `DEPLOY_HOST`, `DEPLOY_USER`
-3. Set repository secret: `DEPLOY_SSH_KEY`
+3. Set repository secrets: `DEPLOY_SSH_KEY`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
 4. Ensure the target host has Docker installed and `/opt/pipeline/` created
 
 Without these, the test and build jobs run normally and the deploy job is skipped.
