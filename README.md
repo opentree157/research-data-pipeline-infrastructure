@@ -179,6 +179,12 @@ Without these, the test and build jobs run normally and the deploy job is skippe
 │   ├── conftest.py         # Fixtures, DB safety guard, SQLite/PG support
 │   ├── test_api.py         # API endpoint + validation tests
 │   └── test_anomaly_detector.py  # Detection, historical context, idempotency tests
+├── terraform/
+│   ├── main.tf             # EC2 instance, security group, Elastic IP
+│   ├── variables.tf        # Configurable inputs (region, instance type, images, creds)
+│   ├── outputs.tf          # Public IP, dashboard URL, SSH command
+│   ├── cloud-init.yml      # Bootstraps Docker and starts the stack on first boot
+│   └── terraform.tfvars.example
 ├── .github/workflows/
 │   └── ci.yml              # CI/CD pipeline (test → build → deploy)
 ├── docker-compose.yml      # Local development orchestration (bind mounts)
@@ -188,22 +194,49 @@ Without these, the test and build jobs run normally and the deploy job is skippe
 └── DATA_GENERATOR_GUIDE.md # Data generator docs (provided)
 ```
 
-## Cloud Deployment
+## Cloud Deployment (AWS)
 
-**Local dev** uses `docker-compose.yml` with bind mounts for nginx config and frontend HTML, allowing live editing.
+The `terraform/` directory contains a Terraform config that provisions the full stack on AWS:
 
-**Production** uses `docker-compose.prod.yml` which references pushed images from GHCR. The nginx service builds a self-contained image with frontend and config baked in — no bind mounts required.
+- EC2 instance (Amazon Linux 2023) with Docker pre-installed via cloud-init
+- Security group allowing HTTP (80) and SSH (configurable CIDR)
+- Elastic IP for a stable public address
+- Automatic stack startup on first boot
 
-To deploy manually:
+### Deploy
 
 ```bash
-# On the target host
-export API_IMAGE=ghcr.io/your-org/research-data-pipeline/api:latest
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your values
+
+terraform init
+terraform plan
+terraform apply
 ```
 
-To use a managed database instead of the containerized one, set `DATABASE_URL` and remove the `db` service from the compose file.
+After a few minutes, `terraform output url` gives you the dashboard URL.
+
+### Tear down
+
+```bash
+terraform destroy
+```
+
+### Manual deployment (without Terraform)
+
+Provision any VM with Docker installed, then:
+
+```bash
+scp docker-compose.prod.yml user@host:/opt/pipeline/docker-compose.yml
+
+ssh user@host "cd /opt/pipeline && \
+  export API_IMAGE=ghcr.io/you/repo/api:latest && \
+  export NGINX_IMAGE=ghcr.io/you/repo/nginx:latest && \
+  export POSTGRES_USER=pipeline && \
+  export POSTGRES_PASSWORD=changeme && \
+  docker compose up -d"
+```
 
 ### Environment Variables
 
