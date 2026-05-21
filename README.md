@@ -5,15 +5,15 @@ A scalable research data processing pipeline that ingests sensor data, detects a
 ## Architecture
 
 ```
-┌─────────────┐       ┌───────────────┐       ┌────────────────┐
-│   Browser    │──────▶│  nginx :8080  │──────▶│  FastAPI :8000 │
-│  (frontend)  │◀──────│ reverse proxy │◀──────│   (api)        │
-└─────────────┘       └───────────────┘       └───────┬────────┘
-                                                      │
-                                              ┌───────▼────────┐
-                                              │ PostgreSQL :5432│
-                                              │   (sensor_data) │
-                                              └────────────────┘
+┌─────────────┐       ┌──────────────────┐       ┌──────────────────┐
+│   Browser   │──────▶│    nginx :8080   │──────▶│   FastAPI :8000  │
+│  (frontend) │◀──────│  (reverse proxy) │◀──────│       (api)      │
+└─────────────┘       └──────────────────┘       └───────┬──────────┘
+                                                         │
+                                                 ┌───────▼──────────┐
+                                                 │ PostgreSQL :5432 │
+                                                 │   (sensor_data)  │
+                                                 └──────────────────┘
 ```
 
 **Components:**
