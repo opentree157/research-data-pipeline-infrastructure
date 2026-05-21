@@ -1,0 +1,8 @@
+aws_region        = "us-east-1"
+instance_type     = "t3.small"
+key_name          = "my-key-pair"
+api_image         = "ghcr.io/your-user/research-data-pipeline-infrastructure/api:latest"
+nginx_image       = "ghcr.io/your-user/research-data-pipeline-infrastructure/nginx:latest"
+postgres_user     = "pipeline"
+postgres_password = "change-me"
+allowed_ssh_cidr  = "1.2.3.4/32"
