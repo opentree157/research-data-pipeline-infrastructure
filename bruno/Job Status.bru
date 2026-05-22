@@ -1,0 +1,23 @@
+meta {
+  name: Job Status
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/jobs/1
+  body: none
+  auth: none
+}
+
+docs {
+  Poll the status of an anomaly detection job.
+
+  Change the job ID in the URL to match the job_id returned by the Upload CSV endpoint.
+
+  Response fields:
+  - status: "pending", "completed", or "failed"
+  - readings_count: number of readings in the batch
+  - anomalies_found: count of detected anomalies (null while pending)
+  - error: error message if status is "failed"
+}

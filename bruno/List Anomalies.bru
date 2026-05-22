@@ -1,0 +1,36 @@
+meta {
+  name: List Anomalies
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/anomalies
+  body: none
+  auth: none
+}
+
+params:query {
+  ~sensor_id: TEMP_001
+  ~start: 2024-01-01T00:00:00Z
+  ~end: 2024-01-02T00:00:00Z
+  limit: 10
+  offset: 0
+}
+
+docs {
+  Query detected anomalies with optional filters. Returns paginated results.
+
+  Query parameters (all optional except limit/offset):
+  - sensor_id: filter by sensor (e.g. TEMP_001, HUMID_003)
+  - start: ISO 8601 datetime for range start
+  - end: ISO 8601 datetime for range end
+  - limit: results per page (1-1000, default 100)
+  - offset: pagination offset (default 0)
+
+  Response includes:
+  - items: array of anomalies with full reading data
+  - total: total matching anomalies (for pagination)
+  - Each anomaly includes: anomaly_type, category (spike/sensor_failure/drift/noise_burst),
+    confidence_score, z_score, rolling_mean, rolling_std, actual_value
+}

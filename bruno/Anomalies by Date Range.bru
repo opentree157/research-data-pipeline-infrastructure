@@ -1,0 +1,24 @@
+meta {
+  name: Anomalies by Date Range
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/anomalies
+  body: none
+  auth: none
+}
+
+params:query {
+  start: 2024-01-01T00:00:00Z
+  end: 2024-01-02T00:00:00Z
+  limit: 50
+  offset: 0
+}
+
+docs {
+  Convenience request: fetch anomalies within a specific time window.
+
+  Adjust start and end to the date range of your ingested data.
+}

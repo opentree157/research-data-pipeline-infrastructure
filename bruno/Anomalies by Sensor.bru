@@ -1,0 +1,23 @@
+meta {
+  name: Anomalies by Sensor
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/anomalies
+  body: none
+  auth: none
+}
+
+params:query {
+  sensor_id: TEMP_001
+  limit: 50
+  offset: 0
+}
+
+docs {
+  Convenience request: fetch anomalies for a specific sensor.
+
+  Change sensor_id to any sensor in the system (use List Sensors to see available IDs).
+}

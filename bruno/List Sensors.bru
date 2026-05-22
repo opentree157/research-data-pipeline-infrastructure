@@ -1,0 +1,17 @@
+meta {
+  name: List Sensors
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/sensors
+  body: none
+  auth: none
+}
+
+docs {
+  Returns a sorted list of all distinct sensor IDs that have been ingested.
+
+  Example response: ["HUMID_003", "MULTI_005", "PRESS_004", "TEMP_001", "TEMP_002"]
+}

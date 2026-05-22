@@ -1,0 +1,26 @@
+meta {
+  name: Upload CSV
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/ingest
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  file: @file(sample_data.csv)
+}
+
+docs {
+  Upload a CSV file with sensor readings. The file must have these columns:
+  id, timestamp, sensor_id, temperature, humidity, pressure, location
+
+  Returns immediately with:
+  - readings_ingested: number of rows inserted
+  - job_id: use this to poll /jobs/{id} for anomaly detection status
+
+  Anomaly detection runs in the background after ingestion completes.
+}

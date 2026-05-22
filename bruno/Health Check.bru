@@ -1,0 +1,21 @@
+meta {
+  name: Health Check
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  Returns API status, database connectivity, and counts of readings and anomalies.
+
+  Response fields:
+  - status: "healthy" or "degraded"
+  - database: "connected" or "disconnected"
+  - readings_count: total sensor readings in the database
+  - anomalies_count: total anomalies detected
+}

@@ -1,0 +1,26 @@
+meta {
+  name: List Readings
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/readings
+  body: none
+  auth: none
+}
+
+params:query {
+  ~sensor_id: TEMP_001
+  limit: 10
+  offset: 0
+}
+
+docs {
+  Query raw sensor readings, ordered by timestamp descending.
+
+  Query parameters:
+  - sensor_id: filter by sensor (optional)
+  - limit: results per page (1-1000, default 100)
+  - offset: pagination offset (default 0)
+}
