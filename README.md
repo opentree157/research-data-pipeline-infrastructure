@@ -1,6 +1,6 @@
 # Research Data Pipeline Infrastructure
 
-A scalable research data processing pipeline that ingests sensor data, detects anomalies using rolling-window statistics, and serves results via a REST API with a web dashboard.
+This is my interpretation of a data processing pipeline that detects anomalies in sensor data. It has frontend reporting capabilities for anomaly analysis, comprehensive API endpoints with Swagger documentation and Bruno collections, and a local observability stack built into the Docker Compose stack to provide monitoring, alerting, and logs. The application is ready for cloud deployment, using pre-built Dockerfiles for the production deploy. Enjoy! --Winston
 
 ## Quick Start
 
