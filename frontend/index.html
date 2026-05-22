@@ -175,13 +175,13 @@ function toggleSort(key) {
   if (sortColumn === key) {
     if (sortDirection === 'asc') {
       sortDirection = 'desc';
-    } else {
+    } else if (sortDirection === 'desc') {
       sortColumn = null;
       sortDirection = null;
     }
   } else {
     sortColumn = key;
-    sortDirection = key === 'confidence' ? 'desc' : 'asc';
+    sortDirection = 'asc';
   }
   sortAndRender();
 }
