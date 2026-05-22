@@ -46,7 +46,7 @@
     .confidence { font-weight: 600; }
     .confidence.high { color: #dc2626; }
     .confidence.medium { color: #f59e0b; }
-    .confidence.low { color: #22c55e; }
+    .confidence.low { color: #d97706; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 500; }
     .badge.temp { background: #fee2e2; color: #991b1b; }
     .badge.humid { background: #dbeafe; color: #1e3a8a; }
@@ -55,7 +55,6 @@
     .badge.cat-sensor_failure { background: #fef2f2; color: #7f1d1d; }
     .badge.cat-drift { background: #eff6ff; color: #1e40af; }
     .badge.cat-noise_burst { background: #fefce8; color: #854d0e; }
-    .detail { display: block; font-size: 0.72rem; color: #6b7280; margin-top: 2px; }
     .empty { text-align: center; padding: 3rem; color: #94a3b8; }
 
     .pagination { display: flex; justify-content: center; align-items: center; gap: 0.25rem; margin-top: 1rem; padding-bottom: 1rem; flex-wrap: wrap; }
@@ -110,6 +109,15 @@
       <label>Sensor
         <select id="sensorSelect"><option value="">All Sensors</option></select>
       </label>
+      <label>Location
+        <select id="locationSelect"><option value="">All Locations</option></select>
+      </label>
+      <label>Metric
+        <select id="metricSelect"><option value="">All Metrics</option></select>
+      </label>
+      <label>Category
+        <select id="categorySelect"><option value="">All Categories</option></select>
+      </label>
       <button class="btn-primary" onclick="applyFilters()">Filter</button>
       <button class="btn-secondary" onclick="clearFilters()">Clear</button>
     </div>
@@ -143,9 +151,9 @@ const COLUMNS = [
   { key: 'location',   sortKey: 'location',         label: 'Location' },
   { key: 'type',       sortKey: 'anomaly_type',     label: 'Metric' },
   { key: 'category',   sortKey: 'category',         label: 'Category' },
-  { key: 'temp',       sortKey: null,               label: 'Temp (°C)' },
-  { key: 'humidity',   sortKey: null,               label: 'Humidity (%)' },
-  { key: 'pressure',   sortKey: null,               label: 'Pressure (hPa)' },
+  { key: 'temp',       sortKey: 'temperature',      label: 'Temp (°C)' },
+  { key: 'humidity',   sortKey: 'humidity',          label: 'Humidity (%)' },
+  { key: 'pressure',   sortKey: 'pressure',          label: 'Pressure (hPa)' },
   { key: 'confidence', sortKey: 'confidence_score', label: 'Confidence' },
 ];
 
@@ -244,6 +252,60 @@ async function loadSensors() {
   } catch {}
 }
 
+async function loadLocations() {
+  try {
+    const r = await fetch('/api/locations');
+    if (!r.ok) return;
+    const items = await r.json();
+    const sel = document.getElementById('locationSelect');
+    const current = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    items.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      sel.appendChild(opt);
+    });
+    sel.value = current;
+  } catch {}
+}
+
+async function loadMetrics() {
+  try {
+    const r = await fetch('/api/anomaly-types');
+    if (!r.ok) return;
+    const items = await r.json();
+    const sel = document.getElementById('metricSelect');
+    const current = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    items.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.replace('_anomaly', '').replace('_', ' ');
+      sel.appendChild(opt);
+    });
+    sel.value = current;
+  } catch {}
+}
+
+async function loadCategories() {
+  try {
+    const r = await fetch('/api/categories');
+    if (!r.ok) return;
+    const items = await r.json();
+    const sel = document.getElementById('categorySelect');
+    const current = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    items.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.replace('_', ' ');
+      sel.appendChild(opt);
+    });
+    sel.value = current;
+  } catch {}
+}
+
 function showEmpty(msg) {
   const body = document.getElementById('anomalyBody');
   body.textContent = '';
@@ -279,13 +341,10 @@ function buildRow(a) {
       const cls = conf > 4 ? 'high' : conf > 2.5 ? 'medium' : 'low';
       span.className = 'confidence ' + cls;
       span.textContent = conf.toFixed(2) + 'σ';
-      td.appendChild(span);
       if (a.z_score != null && a.rolling_mean != null) {
-        const detail = document.createElement('span');
-        detail.className = 'detail';
-        detail.textContent = 'val=' + a.actual_value.toFixed(1) + ' mean=' + a.rolling_mean.toFixed(1) + ' std=' + a.rolling_std.toFixed(2);
-        td.appendChild(detail);
+        span.title = 'val=' + a.actual_value.toFixed(1) + '  mean=' + a.rolling_mean.toFixed(1) + '  std=' + a.rolling_std.toFixed(2);
       }
+      td.appendChild(span);
     } else if (col.key === 'timestamp') {
       td.textContent = new Date(a.reading.timestamp).toLocaleString();
     } else if (col.key === 'sensor_id') {
@@ -319,10 +378,16 @@ async function loadAnomalies() {
   const start = document.getElementById('startDate').value;
   const end = document.getElementById('endDate').value;
   const sensor = document.getElementById('sensorSelect').value;
+  const location = document.getElementById('locationSelect').value;
+  const metric = document.getElementById('metricSelect').value;
+  const category = document.getElementById('categorySelect').value;
 
   if (start) params.set('start', new Date(start).toISOString());
   if (end) params.set('end', new Date(end).toISOString());
   if (sensor) params.set('sensor_id', sensor);
+  if (location) params.set('location', location);
+  if (metric) params.set('anomaly_type', metric);
+  if (category) params.set('category', category);
   if (sortColumn) {
     const col = COLUMNS.find(c => c.key === sortColumn);
     if (col && col.sortKey) {
@@ -429,6 +494,9 @@ function clearFilters() {
   document.getElementById('startDate').value = '';
   document.getElementById('endDate').value = '';
   document.getElementById('sensorSelect').value = '';
+  document.getElementById('locationSelect').value = '';
+  document.getElementById('metricSelect').value = '';
+  document.getElementById('categorySelect').value = '';
   currentOffset = 0;
   loadAnomalies();
 }
@@ -454,6 +522,7 @@ async function uploadCSV() {
     msg.textContent = 'Ingested ' + d.readings_ingested + ' readings — detecting anomalies...';
     msg.className = 'upload-msg ok';
     loadSensors();
+    loadLocations();
     pollJob(d.job_id);
   } catch {
     msg.textContent = 'Upload failed'; msg.className = 'upload-msg err';
@@ -472,6 +541,8 @@ function pollJob(jobId) {
         msg.textContent = 'Done — ' + job.anomalies_found + ' anomalies detected';
         msg.className = 'upload-msg ok';
         checkHealth();
+        loadMetrics();
+        loadCategories();
         currentOffset = 0;
         loadAnomalies();
       } else if (job.status === 'failed') {
@@ -486,6 +557,9 @@ function pollJob(jobId) {
 buildHeaders();
 checkHealth();
 loadSensors();
+loadLocations();
+loadMetrics();
+loadCategories();
 loadAnomalies();
 </script>
 </body>
