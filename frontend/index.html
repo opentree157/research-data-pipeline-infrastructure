@@ -58,8 +58,13 @@
     .detail { display: block; font-size: 0.72rem; color: #6b7280; margin-top: 2px; }
     .empty { text-align: center; padding: 3rem; color: #94a3b8; }
 
-    .pagination { display: flex; justify-content: center; align-items: center; gap: 0.75rem; margin-top: 1rem; padding-bottom: 1rem; flex-wrap: wrap; }
-    .page-info { font-size: 0.85rem; color: #64748b; }
+    .pagination { display: flex; justify-content: center; align-items: center; gap: 0.25rem; margin-top: 1rem; padding-bottom: 1rem; flex-wrap: wrap; }
+    .page-info { font-size: 0.85rem; color: #64748b; margin: 0 0.5rem; }
+    .page-btn { min-width: 2.2rem; padding: 0.35rem 0.5rem; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #374151; font-size: 0.85rem; cursor: pointer; text-align: center; }
+    .page-btn:hover:not(:disabled):not(.active) { background: #f3f4f6; }
+    .page-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; cursor: default; }
+    .page-btn:disabled { opacity: 0.4; cursor: default; }
+    .page-ellipsis { padding: 0.35rem 0.25rem; font-size: 0.85rem; color: #9ca3af; }
 
     .loading-overlay { position: relative; }
     .loading-overlay.loading tbody { opacity: 0.4; pointer-events: none; }
@@ -121,11 +126,7 @@
         </table>
       </div>
     </div>
-    <div class="pagination">
-      <button class="btn-secondary" id="prevBtn" onclick="prevPage()" disabled>&laquo; Prev</button>
-      <span class="page-info" id="pageInfo"></span>
-      <button class="btn-secondary" id="nextBtn" onclick="nextPage()" disabled>Next &raquo;</button>
-    </div>
+    <div class="pagination" id="paginationBar"></div>
   </div>
 
 <script>
@@ -135,18 +136,17 @@ let totalResults = 0;
 let sortColumn = null;
 let sortDirection = null;
 let cachedData = [];
-let serverOrder = [];
 
 const COLUMNS = [
-  { key: 'timestamp', label: 'Timestamp',      getValue: a => a.reading.timestamp },
-  { key: 'sensor_id', label: 'Sensor',          getValue: a => a.reading.sensor_id },
-  { key: 'location',  label: 'Location',        getValue: a => a.reading.location },
-  { key: 'type',      label: 'Metric',          getValue: a => a.anomaly_type },
-  { key: 'category',  label: 'Category',        getValue: a => a.category || '' },
-  { key: 'temp',      label: 'Temp (°C)',  getValue: a => a.reading.temperature },
-  { key: 'humidity',  label: 'Humidity (%)',     getValue: a => a.reading.humidity },
-  { key: 'pressure',  label: 'Pressure (hPa)',  getValue: a => a.reading.pressure },
-  { key: 'confidence',label: 'Confidence',       getValue: a => a.confidence_score },
+  { key: 'timestamp',  sortKey: 'timestamp',        label: 'Timestamp' },
+  { key: 'sensor_id',  sortKey: 'sensor_id',        label: 'Sensor' },
+  { key: 'location',   sortKey: 'location',         label: 'Location' },
+  { key: 'type',       sortKey: 'anomaly_type',     label: 'Metric' },
+  { key: 'category',   sortKey: 'category',         label: 'Category' },
+  { key: 'temp',       sortKey: null,               label: 'Temp (°C)' },
+  { key: 'humidity',   sortKey: null,               label: 'Humidity (%)' },
+  { key: 'pressure',   sortKey: null,               label: 'Pressure (hPa)' },
+  { key: 'confidence', sortKey: 'confidence_score', label: 'Confidence' },
 ];
 
 function buildHeaders() {
@@ -154,19 +154,26 @@ function buildHeaders() {
   row.textContent = '';
   COLUMNS.forEach(col => {
     const th = document.createElement('th');
-    th.addEventListener('click', () => toggleSort(col.key));
+    if (col.sortKey) {
+      th.addEventListener('click', () => toggleSort(col.key));
+      th.style.cursor = 'pointer';
+    } else {
+      th.style.cursor = 'default';
+    }
 
     const text = document.createTextNode(col.label + ' ');
     th.appendChild(text);
 
-    const arrow = document.createElement('span');
-    arrow.className = 'sort-arrow' + (sortColumn === col.key ? ' active' : '');
-    if (sortColumn === col.key) {
-      arrow.textContent = sortDirection === 'asc' ? '▲' : '▼';
-    } else {
-      arrow.textContent = '';
+    if (col.sortKey) {
+      const arrow = document.createElement('span');
+      arrow.className = 'sort-arrow' + (sortColumn === col.key ? ' active' : '');
+      if (sortColumn === col.key) {
+        arrow.textContent = sortDirection === 'asc' ? '▲' : '▼';
+      } else {
+        arrow.textContent = '';
+      }
+      th.appendChild(arrow);
     }
-    th.appendChild(arrow);
     row.appendChild(th);
   });
 }
@@ -183,27 +190,8 @@ function toggleSort(key) {
     sortColumn = key;
     sortDirection = 'asc';
   }
-  sortAndRender();
-}
-
-function sortAndRender() {
-  if (!sortColumn) {
-    cachedData = serverOrder.slice();
-  } else {
-    const col = COLUMNS.find(c => c.key === sortColumn);
-    cachedData.sort((a, b) => {
-      let va = col.getValue(a);
-      let vb = col.getValue(b);
-      if (typeof va === 'string') va = va.toLowerCase();
-      if (typeof vb === 'string') vb = vb.toLowerCase();
-      if (va < vb) return sortDirection === 'asc' ? -1 : 1;
-      if (va > vb) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }
-
-  buildHeaders();
-  renderRows(cachedData);
+  currentOffset = 0;
+  loadAnomalies();
 }
 
 function setStatus(ok, text) {
@@ -300,14 +288,16 @@ function buildRow(a) {
       }
     } else if (col.key === 'timestamp') {
       td.textContent = new Date(a.reading.timestamp).toLocaleString();
+    } else if (col.key === 'sensor_id') {
+      td.textContent = a.reading.sensor_id;
+    } else if (col.key === 'location') {
+      td.textContent = a.reading.location;
     } else if (col.key === 'temp') {
       td.textContent = a.reading.temperature.toFixed(1);
     } else if (col.key === 'humidity') {
       td.textContent = a.reading.humidity.toFixed(1);
     } else if (col.key === 'pressure') {
       td.textContent = a.reading.pressure.toFixed(2);
-    } else {
-      td.textContent = col.getValue(a);
     }
     tr.appendChild(td);
   });
@@ -333,6 +323,13 @@ async function loadAnomalies() {
   if (start) params.set('start', new Date(start).toISOString());
   if (end) params.set('end', new Date(end).toISOString());
   if (sensor) params.set('sensor_id', sensor);
+  if (sortColumn) {
+    const col = COLUMNS.find(c => c.key === sortColumn);
+    if (col && col.sortKey) {
+      params.set('sort_by', col.sortKey);
+      params.set('sort_dir', sortDirection);
+    }
+  }
   params.set('limit', PAGE_SIZE);
   params.set('offset', currentOffset);
 
@@ -342,13 +339,13 @@ async function loadAnomalies() {
     if (!r.ok) { showEmpty('Error loading data'); totalResults = 0; updatePagination(); setLoading(false); return; }
     const data = await r.json();
     totalResults = data.total;
-    serverOrder = data.items.slice();
     cachedData = data.items;
 
+    buildHeaders();
     if (!cachedData.length) {
       showEmpty('No anomalies found');
     } else {
-      sortAndRender();
+      renderRows(cachedData);
     }
     updatePagination();
   } catch {
@@ -359,16 +356,72 @@ async function loadAnomalies() {
   setLoading(false);
 }
 
-function updatePagination() {
-  const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
-  const totalPages = Math.max(1, Math.ceil(totalResults / PAGE_SIZE));
-  document.getElementById('pageInfo').textContent = 'Page ' + page + ' of ' + totalPages + ' (' + totalResults.toLocaleString() + ' total)';
-  document.getElementById('prevBtn').disabled = currentOffset === 0;
-  document.getElementById('nextBtn').disabled = currentOffset + PAGE_SIZE >= totalResults;
+function goToPage(page) {
+  currentOffset = (page - 1) * PAGE_SIZE;
+  loadAnomalies();
 }
 
-function prevPage() { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadAnomalies(); }
-function nextPage() { currentOffset += PAGE_SIZE; loadAnomalies(); }
+function updatePagination() {
+  const bar = document.getElementById('paginationBar');
+  bar.textContent = '';
+  const currentPage = Math.floor(currentOffset / PAGE_SIZE) + 1;
+  const totalPages = Math.max(1, Math.ceil(totalResults / PAGE_SIZE));
+
+  if (totalPages <= 1 && totalResults === 0) {
+    return;
+  }
+
+  const prev = document.createElement('button');
+  prev.className = 'page-btn';
+  prev.textContent = '« Prev';
+  prev.disabled = currentPage === 1;
+  prev.addEventListener('click', () => goToPage(currentPage - 1));
+  bar.appendChild(prev);
+
+  const pages = getPageNumbers(currentPage, totalPages);
+  pages.forEach(p => {
+    if (p === '...') {
+      const span = document.createElement('span');
+      span.className = 'page-ellipsis';
+      span.textContent = '...';
+      bar.appendChild(span);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'page-btn' + (p === currentPage ? ' active' : '');
+      btn.textContent = p;
+      btn.addEventListener('click', () => goToPage(p));
+      bar.appendChild(btn);
+    }
+  });
+
+  const info = document.createElement('span');
+  info.className = 'page-info';
+  info.textContent = totalResults.toLocaleString() + ' total';
+  bar.appendChild(info);
+
+  const next = document.createElement('button');
+  next.className = 'page-btn';
+  next.textContent = 'Next »';
+  next.disabled = currentPage === totalPages;
+  next.addEventListener('click', () => goToPage(currentPage + 1));
+  bar.appendChild(next);
+}
+
+function getPageNumbers(current, total) {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const pages = new Set([1, 2, total - 1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter(p => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i] - sorted[i - 1] > 1) {
+      result.push('...');
+    }
+    result.push(sorted[i]);
+  }
+  return result;
+}
 
 function applyFilters() { currentOffset = 0; loadAnomalies(); }
 
