@@ -1,0 +1,15 @@
+meta {
+  name: List Locations
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/locations
+  body: none
+  auth: none
+}
+
+docs {
+  Returns a sorted list of distinct sensor locations in the system.
+}

@@ -1,0 +1,15 @@
+meta {
+  name: List Categories
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/categories
+  body: none
+  auth: none
+}
+
+docs {
+  Returns a sorted list of distinct anomaly categories in the system.
+}

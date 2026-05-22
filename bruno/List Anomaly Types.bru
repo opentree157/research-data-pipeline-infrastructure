@@ -1,0 +1,15 @@
+meta {
+  name: List Anomaly Types
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/anomaly-types
+  body: none
+  auth: none
+}
+
+docs {
+  Returns a sorted list of distinct anomaly types (metrics) in the system.
+}
