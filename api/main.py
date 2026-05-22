@@ -149,11 +149,23 @@ def get_job_status(job_id: int, db: Session = Depends(get_db)):
     return job
 
 
+SORT_COLUMNS = {
+    "timestamp": SensorReading.timestamp,
+    "sensor_id": SensorReading.sensor_id,
+    "location": SensorReading.location,
+    "anomaly_type": Anomaly.anomaly_type,
+    "category": Anomaly.category,
+    "confidence_score": Anomaly.confidence_score,
+}
+
+
 @app.get("/anomalies", response_model=PaginatedAnomalies)
 def get_anomalies(
     start: Optional[datetime] = Query(None, description="Start datetime (ISO 8601)"),
     end: Optional[datetime] = Query(None, description="End datetime (ISO 8601)"),
     sensor_id: Optional[str] = Query(None, description="Filter by sensor ID"),
+    sort_by: Optional[str] = Query(None, description="Sort column"),
+    sort_dir: Optional[str] = Query("asc", description="Sort direction: asc or desc"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -172,7 +184,14 @@ def get_anomalies(
         query = query.filter(SensorReading.sensor_id == sensor_id)
 
     total = query.count()
-    items = query.order_by(Anomaly.detected_at.desc(), Anomaly.id.desc()).offset(offset).limit(limit).all()
+
+    col = SORT_COLUMNS.get(sort_by) if sort_by else None
+    if col is not None:
+        order = col.desc() if sort_dir == "desc" else col.asc()
+        items = query.order_by(order, Anomaly.id).offset(offset).limit(limit).all()
+    else:
+        items = query.order_by(Anomaly.detected_at.desc(), Anomaly.id.desc()).offset(offset).limit(limit).all()
+
     return PaginatedAnomalies(items=items, total=total, limit=limit, offset=offset)
 
 
