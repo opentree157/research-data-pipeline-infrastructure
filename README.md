@@ -55,10 +55,61 @@ Everything runs as Docker containers orchestrated by Docker Compose. One command
 - **All config via environment variables** — `docker-compose.yml` uses `${VAR:-default}` for every setting. No `.env` file needed for local development.
 - **Self-hosted observability** — Prometheus + Grafana + Loki runs alongside the app with no external accounts or API keys. Dashboards and datasources are auto-provisioned.
 
+### Performance and Scaling
+
+The current architecture handles **10k–100k row CSVs comfortably** in a single request with no infrastructure changes:
+
+| Dataset Size | Ingest (sync) | Anomaly Detection (background) | Total |
+|-------------|---------------|-------------------------------|-------|
+| 10,000 rows  | < 1s          | ~1s                           | ~1–2s |
+| 30,000 rows  | ~1s           | ~1–2s                         | ~2–3s |
+| 100,000 rows | ~3s           | ~3–4s                         | ~6–7s |
+
+**Why it's fast at this scale:**
+
+- **Batch inserts** — `ingest_csv` uses SQLAlchemy Core `insert().returning()` to write rows in chunks of 5,000. At 100k rows that's 20 bulk INSERT round-trips, not 100k individual ones.
+- **Vectorized detection** — anomaly detection pre-computes rolling mean, standard deviation, z-scores, and drift detection for all metrics per sensor using pandas vectorized operations. Classification uses pre-computed cross-metric stats instead of recalculating per anomaly.
+- **Range queries** — the detector fetches new readings with `WHERE id BETWEEN min AND max` instead of a massive `IN (...)` clause, keeping SQL parse time constant regardless of batch size.
+- **Immediate response** — the user gets a response with a `job_id` as soon as ingestion completes. Detection runs in a FastAPI `BackgroundTask`, and the frontend polls for completion.
+
+**Where it would break down (500k+ rows, concurrent uploads):**
+
+The current system processes one upload at a time in a single background thread inside the API process. This works because:
+1. Uploads are sequential — one user uploading at a time.
+2. The dataset fits in memory — 100k rows is ~50MB as a pandas DataFrame.
+3. Detection finishes fast enough that the background thread is free before the next upload.
+
+At higher scale, these assumptions fail:
+
+- **Concurrent uploads** would queue up in a single background thread. Upload B's detection won't start until upload A's finishes. Under load, the queue grows unbounded.
+- **Memory pressure** — multiple 500k-row DataFrames in the API process could exhaust container memory.
+- **No retry semantics** — if the API process crashes mid-detection, the job stays "pending" forever. There's no dead-letter queue or automatic retry.
+
+**Future optimization: Celery + Redis task queue**
+
+The natural next step is to move anomaly detection out of the API process and into a dedicated worker pool:
+
+```
+Browser → nginx → FastAPI → Redis (task broker)
+                                  ↓
+                          Celery Workers (1..N)
+                                  ↓
+                            PostgreSQL
+```
+
+What changes:
+- **Redis** acts as the message broker. `POST /ingest` enqueues a detection task instead of using `BackgroundTasks`.
+- **Celery workers** run as separate containers, each pulling tasks from Redis. Scale horizontally by adding more worker replicas.
+- **Retry and failure handling** comes built-in — failed tasks retry with exponential backoff, dead-letter after N attempts. No more silent "pending" jobs.
+- **Concurrency** — multiple uploads process in parallel across workers instead of queuing in a single thread.
+
+The change to the application code is small — replace `background_tasks.add_task(_run_detection, ...)` with `detect_anomalies_task.delay(job_id, reading_ids)` and add a `celery_app.py` config. The detection logic itself doesn't change.
+
+This is worth doing when you're handling multiple concurrent users or uploads larger than 500k rows. For a single-user pipeline processing 10k–100k rows at a time, the current `BackgroundTask` approach is simpler and fast enough.
+
 ### Operational Notes
 
-- **Processing latency** — for 10k rows, anomaly detection typically takes 1-2 seconds in the background thread.
-- **Memory** — the current design reads the full CSV into memory. Fine for tens of thousands of rows, but would need streaming for millions.
+- **Memory** — the current design reads the full CSV into memory. Fine for hundreds of thousands of rows, but would need streaming for millions.
 - **Test safety** — the test suite refuses to run against any PostgreSQL database whose name does not contain "test".
 
 ## Quick Start
@@ -132,14 +183,17 @@ docker compose down -v     # stop containers and delete data
 
 ## API Reference
 
-| Method | Endpoint          | Description                                      | Query Params                                    |
-|--------|-------------------|--------------------------------------------------|-------------------------------------------------|
-| GET    | `/api/health`     | Health check with DB status and counts            | -                                               |
-| POST   | `/api/ingest`     | Upload CSV; returns `job_id` for status tracking  | `file` (multipart)                              |
-| GET    | `/api/jobs/{id}`  | Poll processing job status                        | -                                               |
-| GET    | `/api/anomalies`  | Query anomalies with filters                      | `start`, `end`, `sensor_id`, `limit`, `offset`  |
-| GET    | `/api/sensors`    | List distinct sensor IDs                          | -                                               |
-| GET    | `/api/readings`   | Query raw sensor readings                         | `sensor_id`, `limit`, `offset`                  |
+| Method | Endpoint            | Description                                      | Query Params                                                                          |
+|--------|---------------------|--------------------------------------------------|---------------------------------------------------------------------------------------|
+| GET    | `/api/health`       | Health check with DB status and counts            | -                                                                                     |
+| POST   | `/api/ingest`       | Upload CSV; returns `job_id` for status tracking  | `file` (multipart)                                                                    |
+| GET    | `/api/jobs/{id}`    | Poll processing job status                        | -                                                                                     |
+| GET    | `/api/anomalies`    | Query anomalies with filters and sorting          | `start`, `end`, `sensor_id`, `location`, `anomaly_type`, `category`, `sort_by`, `sort_dir`, `limit`, `offset` |
+| GET    | `/api/sensors`      | List distinct sensor IDs                          | -                                                                                     |
+| GET    | `/api/locations`    | List distinct sensor locations                    | -                                                                                     |
+| GET    | `/api/anomaly-types`| List distinct anomaly types (metrics)             | -                                                                                     |
+| GET    | `/api/categories`   | List distinct anomaly categories                  | -                                                                                     |
+| GET    | `/api/readings`     | Query raw sensor readings                         | `sensor_id`, `limit`, `offset`                                                        |
 
 Interactive API docs (Swagger UI) are available at **http://localhost:8080/api/docs** when the stack is running.
 
@@ -283,6 +337,43 @@ The API emits JSON-structured logs with `timestamp`, `level`, `name`, and `messa
 - Anomaly detection failures (with traceback)
 
 Logs from all containers are collected by Promtail and queryable in Grafana via the Loki datasource.
+
+### Using Metrics and Alerts
+
+**Grafana** (http://localhost:3000, `admin`/`admin`) is the main interface for monitoring. Here's how to use it:
+
+**Check the pre-built dashboard:**
+
+1. Go to Dashboards → Pipeline Overview.
+2. The top row shows request rate and error rate. A spike in errors after an upload likely means a malformed CSV or a detection failure.
+3. The latency panels (p50/p95/p99) show how long API responses take. If p95 jumps during anomaly detection, that's normal — the `/ingest` endpoint does synchronous DB writes. If p95 stays high on `/anomalies` queries, you may need a database index.
+4. The PostgreSQL panels show connection count and table row estimates. Watch for connection count creeping up — it suggests leaked sessions.
+
+**Query logs:**
+
+1. In Grafana, go to Explore → select the Loki datasource.
+2. Use LogQL queries to find specific events:
+   - All API logs: `{container_name=~".*api.*"}`
+   - Anomaly detection results: `{container_name=~".*api.*"} |= "Detected" | json`
+   - Errors only: `{container_name=~".*api.*"} | json | level="ERROR"`
+   - Logs for a specific job: `{container_name=~".*api.*"} |= "job_id" | json | job_id=5`
+
+**Check alert status:**
+
+1. Go to Alerting → Alert rules in Grafana.
+2. Each rule shows its current state: OK, Pending, or Firing.
+3. To test alerting, stop the API container (`docker compose stop api`) and wait ~1 minute — the **APIDown** alert should fire.
+4. To receive notifications, configure a contact point under Alerting → Contact points (supports email, Slack, PagerDuty, webhooks).
+
+**Query Prometheus directly:**
+
+Prometheus is available at http://localhost:9090 for ad-hoc metric queries:
+
+- `rate(http_requests_total[5m])` — request rate over 5 minutes
+- `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))` — p99 latency
+- `pg_stat_activity_count` — active PostgreSQL connections
+- `http_requests_total{status=~"5.."}` — total 5xx error count
+- `up` — which scrape targets are reachable (1 = up, 0 = down)
 
 ## Cloud Deployment (AWS)
 
