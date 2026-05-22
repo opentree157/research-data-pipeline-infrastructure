@@ -12,7 +12,7 @@ Everything runs as Docker containers orchestrated by Docker Compose. One command
 
 **PostgreSQL** stores everything: raw sensor readings, detected anomalies, and processing job status. Data persists across container restarts via a Docker named volume. Schema changes are managed by Alembic migrations, which run automatically when the API starts up.
 
-**The anomaly detector** looks at each sensor's readings in time order using a rolling window (default: 20 readings). For each new reading, it computes the mean and standard deviation of the window. If a reading is more than 2 standard deviations from the mean, it's flagged as an anomaly with a confidence score (the absolute z-score). It pulls historical readings from the database so the rolling window works correctly across multiple CSV uploads.
+**The anomaly detector** looks at each sensor's readings in time order using a rolling window (default: 20 readings). For each metric (temperature, humidity, pressure), it computes the rolling mean and standard deviation. If a reading is more than 2 standard deviations from the mean, it's flagged as an anomaly with a confidence score (the absolute z-score) and classified into one of four categories: **spike** (extreme single-point deviation), **drift** (sustained monotonic trend), **sensor_failure** (sentinel values like -999 or 0), or **noise_burst** (multiple metrics anomalous simultaneously). It pulls historical readings from the database so the rolling window works correctly across multiple CSV uploads.
 
 **The frontend** is a single HTML file with vanilla JavaScript. It shows anomalies in a sortable, filterable, paginated table with color-coded confidence levels. All rendering uses DOM node creation (not innerHTML) to prevent XSS from CSV-controlled fields.
 
@@ -27,19 +27,19 @@ Everything runs as Docker containers orchestrated by Docker Compose. One command
                                                  ┌───────▼──────────┐
                                                  │ PostgreSQL :5432 │
                                                  │   (sensor_data)  │
-                                                 └────────┬─────────┘
-                                                          │
-┌───────────────────── Observability ─────────────────────┤
+                                                 └───────┬──────────┘
+                                                         │
+┌──────────────────── Observability ──────────────────────┤
 │                                                         │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┤
-│  │ Grafana :3000│◀───│  Prometheus  │◀───│   Exporters  │
-│  │ (dashboards) │    │    :9090     │    │ (pg, nginx)  │
-│  │              │◀───│              │    └──────────────┘
-│  │              │    └──────────────┘
-│  │              │◀───┌──────────────┐    ┌───────────────┐
-│  │              │    │  Loki :3100  │◀───│   Promtail    │
-│  └──────────────┘    │    (logs)    │    │ (Docker logs) │
-│                      └──────────────┘    └───────────────┘
+│  ┌──────────────┐    ┌──────────────┐    ┌────────────┐ │
+│  │ Grafana :3000│◀───│  Prometheus  │◀───│  Exporters │ │
+│  │ (dashboards) │    │    :9090     │    │ (pg, nginx)│ │
+│  │              │◀───│              │    └────────────┘ │
+│  │              │    └──────────────┘                   │
+│  │              │◀───┌──────────────┐    ┌────────────┐ │
+│  │              │    │  Loki :3100  │◀───│  Promtail  │ │
+│  └──────────────┘    │    (logs)    │    │(Docker logs)│ │
+│                      └──────────────┘    └────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -328,6 +328,10 @@ Without these, the test and build jobs run normally and the deploy job is skippe
 │   │   └── loki-config.yml # Log aggregation config (7-day retention)
 │   └── promtail/
 │       └── promtail-config.yml  # Docker log collection via socket
+├── bruno/
+│   ├── bruno.json          # Collection config
+│   ├── environments/       # Environment variables (baseUrl)
+│   └── *.bru               # 11 API request files (health, ingest, anomalies, etc.)
 ├── .github/workflows/
 │   └── ci.yml              # CI/CD pipeline (test → build → deploy)
 ├── docker-compose.yml      # Local development orchestration (bind mounts)
