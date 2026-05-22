@@ -2,6 +2,75 @@
 
 A scalable research data processing pipeline that ingests sensor data, detects anomalies using rolling-window statistics, and serves results via a REST API with a web dashboard.
 
+## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Python 3.9+ (for data generation and local testing)
+
+### 1. Start the stack
+
+```bash
+docker compose up -d --build
+```
+
+All configuration has sensible defaults in `docker-compose.yml`. No `.env` file is required for local development.
+
+- **Dashboard**: http://localhost:8080
+- **Grafana** (monitoring): http://localhost:3000 (admin / admin)
+- **API docs**: http://localhost:8080/api/docs
+
+### 2. Set up Python environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r api/requirements.txt -r tests/requirements-test.txt
+```
+
+### 3. Generate test data
+
+```bash
+python3 2_generate_data.py -n 10000 -o sample_data.csv --seed 42
+```
+
+### 4. Ingest data
+
+**Option A** — via the web dashboard: click "Upload CSV" and select `sample_data.csv`.
+
+**Option B** — via curl:
+
+```bash
+curl -X POST http://localhost:8080/api/ingest \
+  -F "file=@sample_data.csv"
+```
+
+The response returns immediately with the number of ingested readings. Anomaly detection runs in the background.
+
+### 5. Query anomalies
+
+```bash
+# All anomalies (paginated)
+curl "http://localhost:8080/api/anomalies?limit=10"
+
+# Filter by sensor and date range
+curl "http://localhost:8080/api/anomalies?sensor_id=TEMP_001&start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z"
+
+# List sensors
+curl http://localhost:8080/api/sensors
+
+# Health check
+curl http://localhost:8080/api/health
+```
+
+### 6. Stop the stack
+
+```bash
+docker compose down        # stop containers, keep data
+docker compose down -v     # stop containers and delete data
+```
+
 ## How It Works
 
 Everything runs as Docker containers orchestrated by Docker Compose. One command (`docker compose up`) starts the entire system.
@@ -111,75 +180,6 @@ This is worth doing when you're handling multiple concurrent users or uploads la
 
 - **Memory** — the current design reads the full CSV into memory. Fine for hundreds of thousands of rows, but would need streaming for millions.
 - **Test safety** — the test suite refuses to run against any PostgreSQL database whose name does not contain "test".
-
-## Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Python 3.9+ (for data generation and local testing)
-
-### 1. Start the stack
-
-```bash
-docker compose up -d --build
-```
-
-All configuration has sensible defaults in `docker-compose.yml`. No `.env` file is required for local development.
-
-- **Dashboard**: http://localhost:8080
-- **Grafana** (monitoring): http://localhost:3000 (admin / admin)
-- **API docs**: http://localhost:8080/api/docs
-
-### 2. Set up Python environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r api/requirements.txt -r tests/requirements-test.txt
-```
-
-### 3. Generate test data
-
-```bash
-python3 2_generate_data.py -n 10000 -o sample_data.csv --seed 42
-```
-
-### 4. Ingest data
-
-**Option A** — via the web dashboard: click "Upload CSV" and select `sample_data.csv`.
-
-**Option B** — via curl:
-
-```bash
-curl -X POST http://localhost:8080/api/ingest \
-  -F "file=@sample_data.csv"
-```
-
-The response returns immediately with the number of ingested readings. Anomaly detection runs in the background.
-
-### 5. Query anomalies
-
-```bash
-# All anomalies (paginated)
-curl "http://localhost:8080/api/anomalies?limit=10"
-
-# Filter by sensor and date range
-curl "http://localhost:8080/api/anomalies?sensor_id=TEMP_001&start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z"
-
-# List sensors
-curl http://localhost:8080/api/sensors
-
-# Health check
-curl http://localhost:8080/api/health
-```
-
-### 6. Stop the stack
-
-```bash
-docker compose down        # stop containers, keep data
-docker compose down -v     # stop containers and delete data
-```
 
 ## API Reference
 
