@@ -6,7 +6,7 @@ This is my interpretation of a data processing pipeline that detects anomalies i
 
 ### Prerequisites
 
-- Docker and Docker Compose
+- Docker
 - Python 3.9+ (for data generation and local testing)
 
 ### 1. Start the stack
