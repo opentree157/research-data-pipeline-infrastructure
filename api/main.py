@@ -155,6 +155,9 @@ SORT_COLUMNS = {
     "location": SensorReading.location,
     "anomaly_type": Anomaly.anomaly_type,
     "category": Anomaly.category,
+    "temperature": SensorReading.temperature,
+    "humidity": SensorReading.humidity,
+    "pressure": SensorReading.pressure,
     "confidence_score": Anomaly.confidence_score,
 }
 
@@ -164,6 +167,9 @@ def get_anomalies(
     start: Optional[datetime] = Query(None, description="Start datetime (ISO 8601)"),
     end: Optional[datetime] = Query(None, description="End datetime (ISO 8601)"),
     sensor_id: Optional[str] = Query(None, description="Filter by sensor ID"),
+    location: Optional[str] = Query(None, description="Filter by location"),
+    anomaly_type: Optional[str] = Query(None, description="Filter by anomaly type (metric)"),
+    category: Optional[str] = Query(None, description="Filter by category"),
     sort_by: Optional[str] = Query(None, description="Sort column"),
     sort_dir: Optional[str] = Query("asc", description="Sort direction: asc or desc"),
     limit: int = Query(100, ge=1, le=1000),
@@ -182,6 +188,12 @@ def get_anomalies(
         query = query.filter(SensorReading.timestamp <= end)
     if sensor_id:
         query = query.filter(SensorReading.sensor_id == sensor_id)
+    if location:
+        query = query.filter(SensorReading.location == location)
+    if anomaly_type:
+        query = query.filter(Anomaly.anomaly_type == anomaly_type)
+    if category:
+        query = query.filter(Anomaly.category == category)
 
     total = query.count()
 
@@ -199,6 +211,24 @@ def get_anomalies(
 def list_sensors(db: Session = Depends(get_db)):
     rows = db.query(SensorReading.sensor_id).distinct().all()
     return sorted(r[0] for r in rows)
+
+
+@app.get("/locations", response_model=list[str])
+def list_locations(db: Session = Depends(get_db)):
+    rows = db.query(SensorReading.location).distinct().all()
+    return sorted(r[0] for r in rows if r[0])
+
+
+@app.get("/anomaly-types", response_model=list[str])
+def list_anomaly_types(db: Session = Depends(get_db)):
+    rows = db.query(Anomaly.anomaly_type).distinct().all()
+    return sorted(r[0] for r in rows if r[0])
+
+
+@app.get("/categories", response_model=list[str])
+def list_categories(db: Session = Depends(get_db)):
+    rows = db.query(Anomaly.category).distinct().all()
+    return sorted(r[0] for r in rows if r[0])
 
 
 @app.get("/readings", response_model=list[SensorReadingOut])
