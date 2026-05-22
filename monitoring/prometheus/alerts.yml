@@ -28,6 +28,53 @@ groups:
           summary: "FastAPI service is down"
           description: "Prometheus cannot reach the API metrics endpoint."
 
+  - name: anomalies
+    rules:
+      - alert: SensorFailureDetected
+        expr: increase(anomalies_detected_total{category="sensor_failure"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sensor failure detected on {{ $labels.sensor_id }}"
+          description: "{{ $value }} sensor failure anomalies on {{ $labels.sensor_id }} ({{ $labels.metric }}) in the last 5 minutes."
+
+      - alert: AnomalySpike
+        expr: increase(anomalies_detected_total{category="spike"}[5m]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Multiple spike anomalies on {{ $labels.sensor_id }}"
+          description: "{{ $value }} spike anomalies on {{ $labels.sensor_id }} ({{ $labels.metric }}) in the last 5 minutes."
+
+      - alert: SensorDrift
+        expr: increase(anomalies_detected_total{category="drift"}[5m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sensor drift detected on {{ $labels.sensor_id }}"
+          description: "{{ $value }} drift anomalies on {{ $labels.sensor_id }} ({{ $labels.metric }}) in the last 5 minutes. Sensor may be miscalibrated."
+
+      - alert: NoiseBurst
+        expr: increase(anomalies_detected_total{category="noise_burst"}[5m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Noise burst detected on {{ $labels.sensor_id }}"
+          description: "{{ $value }} noise burst anomalies on {{ $labels.sensor_id }} ({{ $labels.metric }}) in the last 5 minutes. Multiple metrics affected simultaneously."
+
+      - alert: HighAnomalyRate
+        expr: sum(increase(anomalies_detected_total[5m])) > 100
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High anomaly rate across all sensors"
+          description: "{{ $value }} total anomalies detected in the last 5 minutes across all sensors and metrics."
+
   - name: database
     rules:
       - alert: PostgreSQLDown

@@ -13,6 +13,7 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from config import ANOMALY_THRESHOLD, ROLLING_WINDOW_SIZE
+from metrics import anomalies_detected_total
 from models import Anomaly, SensorReading
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,9 @@ def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
                     "actual_value": round(value, 4),
                     "detected_at": now,
                 })
+                anomalies_detected_total.labels(
+                    sensor_id=sensor_id, category=category, metric=metric,
+                ).inc()
 
     if not anomaly_rows:
         logger.info("Detected 0 anomalies in %d readings", len(new_id_set))

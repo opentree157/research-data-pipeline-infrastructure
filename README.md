@@ -372,6 +372,15 @@ A **Pipeline Overview** dashboard is pre-provisioned with:
 ### Alerts
 
 Prometheus alert rules fire on:
+
+**Anomaly alerts:**
+- **SensorFailureDetected** — any sensor failure anomaly detected (severity: critical)
+- **AnomalySpike** — more than 5 spike anomalies from a single sensor in 5 minutes
+- **SensorDrift** — more than 3 drift anomalies from a single sensor in 5 minutes
+- **NoiseBurst** — more than 3 noise burst anomalies from a single sensor in 5 minutes
+- **HighAnomalyRate** — more than 100 total anomalies across all sensors in 5 minutes
+
+**Infrastructure alerts:**
 - **HighErrorRate** — >5% of requests returning 5xx for 2 minutes
 - **HighLatency** — p95 latency above 2s for 5 minutes
 - **APIDown** — FastAPI metrics endpoint unreachable for 1 minute
@@ -379,7 +388,7 @@ Prometheus alert rules fire on:
 - **HighDatabaseConnections** — >80 active connections for 5 minutes
 - **NginxDown** — nginx exporter unreachable for 1 minute
 
-Alerts appear in Grafana's Alerting UI. To receive notifications (email, Slack, PagerDuty), configure a contact point in Grafana under Alerting > Contact points.
+Anomaly alerts include the sensor ID, metric, and count in the alert description. All alerts appear in Grafana's Alerting UI. To receive notifications (email, Slack, PagerDuty), configure a contact point in Grafana under Alerting > Contact points.
 
 ### Structured Logging
 
