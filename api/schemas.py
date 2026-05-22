@@ -20,7 +20,12 @@ class AnomalyDetail(BaseModel):
     id: int
     sensor_data_id: int
     anomaly_type: str
+    category: Optional[str]
     confidence_score: float
+    z_score: Optional[float]
+    rolling_mean: Optional[float]
+    rolling_std: Optional[float]
+    actual_value: Optional[float]
     detected_at: datetime
     reading: SensorReadingOut
 

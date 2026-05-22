@@ -51,6 +51,11 @@
     .badge.temp { background: #fee2e2; color: #991b1b; }
     .badge.humid { background: #dbeafe; color: #1e3a8a; }
     .badge.press { background: #fef3c7; color: #92400e; }
+    .badge.cat-spike { background: #fce7f3; color: #9d174d; }
+    .badge.cat-sensor_failure { background: #fef2f2; color: #7f1d1d; }
+    .badge.cat-drift { background: #eff6ff; color: #1e40af; }
+    .badge.cat-noise_burst { background: #fefce8; color: #854d0e; }
+    .detail { display: block; font-size: 0.72rem; color: #6b7280; margin-top: 2px; }
     .empty { text-align: center; padding: 3rem; color: #94a3b8; }
 
     .pagination { display: flex; justify-content: center; align-items: center; gap: 0.75rem; margin-top: 1rem; padding-bottom: 1rem; flex-wrap: wrap; }
@@ -111,7 +116,7 @@
             <tr id="headerRow"></tr>
           </thead>
           <tbody id="anomalyBody">
-            <tr><td colspan="8" class="empty">Loading...</td></tr>
+            <tr><td colspan="9" class="empty">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -136,7 +141,8 @@ const COLUMNS = [
   { key: 'timestamp', label: 'Timestamp',      getValue: a => a.reading.timestamp },
   { key: 'sensor_id', label: 'Sensor',          getValue: a => a.reading.sensor_id },
   { key: 'location',  label: 'Location',        getValue: a => a.reading.location },
-  { key: 'type',      label: 'Type',            getValue: a => a.anomaly_type },
+  { key: 'type',      label: 'Metric',          getValue: a => a.anomaly_type },
+  { key: 'category',  label: 'Category',        getValue: a => a.category || '' },
   { key: 'temp',      label: 'Temp (°C)',  getValue: a => a.reading.temperature },
   { key: 'humidity',  label: 'Humidity (%)',     getValue: a => a.reading.humidity },
   { key: 'pressure',  label: 'Pressure (hPa)',  getValue: a => a.reading.pressure },
@@ -255,7 +261,7 @@ function showEmpty(msg) {
   body.textContent = '';
   const tr = document.createElement('tr');
   const td = document.createElement('td');
-  td.colSpan = 8;
+  td.colSpan = 9;
   td.className = 'empty';
   td.textContent = msg;
   tr.appendChild(td);
@@ -272,6 +278,13 @@ function buildRow(a) {
       span.className = 'badge ' + typeCls;
       span.textContent = a.anomaly_type.replace('_anomaly', '').replace('_', ' ');
       td.appendChild(span);
+    } else if (col.key === 'category') {
+      if (a.category) {
+        const span = document.createElement('span');
+        span.className = 'badge cat-' + a.category;
+        span.textContent = a.category.replace('_', ' ');
+        td.appendChild(span);
+      }
     } else if (col.key === 'confidence') {
       const span = document.createElement('span');
       const conf = a.confidence_score;
@@ -279,6 +292,12 @@ function buildRow(a) {
       span.className = 'confidence ' + cls;
       span.textContent = conf.toFixed(2) + 'σ';
       td.appendChild(span);
+      if (a.z_score != null && a.rolling_mean != null) {
+        const detail = document.createElement('span');
+        detail.className = 'detail';
+        detail.textContent = 'val=' + a.actual_value.toFixed(1) + ' mean=' + a.rolling_mean.toFixed(1) + ' std=' + a.rolling_std.toFixed(2);
+        td.appendChild(detail);
+      }
     } else if (col.key === 'timestamp') {
       td.textContent = new Date(a.reading.timestamp).toLocaleString();
     } else if (col.key === 'temp') {

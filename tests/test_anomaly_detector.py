@@ -63,3 +63,32 @@ def test_idempotent_detection(db):
     from models import Anomaly
     total = db.query(Anomaly).count()
     assert total == count1
+
+
+def test_anomaly_classification_and_details(db):
+    """Anomalies should have category, z-score, rolling stats, and actual value."""
+    temps = [22.0] * 25 + [50.0]
+    ids = _make_readings(db, temps)
+    detect_anomalies(db, ids)
+
+    from models import Anomaly
+    anomaly = db.query(Anomaly).first()
+    assert anomaly is not None
+    assert anomaly.category in ("spike", "sensor_failure", "drift", "noise_burst")
+    assert anomaly.z_score is not None
+    assert abs(anomaly.z_score) > 2.0
+    assert anomaly.rolling_mean is not None
+    assert anomaly.rolling_std is not None
+    assert anomaly.actual_value is not None
+
+
+def test_sensor_failure_classification(db):
+    """Readings at -999 should be classified as sensor_failure."""
+    temps = [22.0] * 25 + [-999.0]
+    ids = _make_readings(db, temps)
+    detect_anomalies(db, ids)
+
+    from models import Anomaly
+    anomalies = db.query(Anomaly).all()
+    categories = {a.category for a in anomalies}
+    assert "sensor_failure" in categories

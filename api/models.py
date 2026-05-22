@@ -40,7 +40,12 @@ class Anomaly(Base):
         Integer, ForeignKey("sensor_readings.id"), nullable=False, index=True
     )
     anomaly_type = Column(String(50), nullable=False)
+    category = Column(String(30))
     confidence_score = Column(Float, nullable=False)
+    z_score = Column(Float)
+    rolling_mean = Column(Float)
+    rolling_std = Column(Float)
+    actual_value = Column(Float)
     detected_at = Column(DateTime(timezone=True), server_default=func.now())
 
     reading = relationship("SensorReading", back_populates="anomalies")

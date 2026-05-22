@@ -2,7 +2,21 @@
 
 A scalable research data processing pipeline that ingests sensor data, detects anomalies using rolling-window statistics, and serves results via a REST API with a web dashboard.
 
-## Architecture
+## How It Works
+
+Everything runs as Docker containers orchestrated by Docker Compose. One command (`docker compose up`) starts the entire system.
+
+**nginx** is the front door. It's the only thing exposed to the outside world (port 8080). When you visit the dashboard in your browser, nginx serves the static HTML directly. When the browser makes an API call to `/api/anything`, nginx strips the `/api/` prefix and forwards the request to the FastAPI backend.
+
+**FastAPI** is the brain. It handles three things: ingesting CSV files, running anomaly detection, and answering queries. When you upload a CSV, it validates the data (correct columns, parseable timestamps, numeric values), batch-inserts the readings into PostgreSQL, and kicks off anomaly detection in a background thread. You get a response immediately with a job ID — no waiting around. The frontend polls that job ID until detection finishes.
+
+**PostgreSQL** stores everything: raw sensor readings, detected anomalies, and processing job status. Data persists across container restarts via a Docker named volume. Schema changes are managed by Alembic migrations, which run automatically when the API starts up.
+
+**The anomaly detector** looks at each sensor's readings in time order using a rolling window (default: 20 readings). For each new reading, it computes the mean and standard deviation of the window. If a reading is more than 2 standard deviations from the mean, it's flagged as an anomaly with a confidence score (the absolute z-score). It pulls historical readings from the database so the rolling window works correctly across multiple CSV uploads.
+
+**The frontend** is a single HTML file with vanilla JavaScript. It shows anomalies in a sortable, filterable, paginated table with color-coded confidence levels. All rendering uses DOM node creation (not innerHTML) to prevent XSS from CSV-controlled fields.
+
+**Monitoring** runs alongside the application. Prometheus scrapes metrics from the API (request rates, latency percentiles, error counts), PostgreSQL (connections, row counts), and nginx (active connections). Loki collects logs from every container. Grafana ties it all together with a pre-built dashboard and alert rules that fire on high error rates, high latency, or services going down.
 
 ```
 ┌─────────────┐       ┌──────────────────┐       ┌──────────────────┐
@@ -29,35 +43,23 @@ A scalable research data processing pipeline that ingests sensor data, detects a
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Components:**
-
-| Service    | Role                                                             | Tech                  |
-|------------|------------------------------------------------------------------|-----------------------|
-| **api**    | CSV ingestion, anomaly detection, REST endpoints                 | FastAPI, SQLAlchemy   |
-| **db**     | Persistent storage for readings and anomaly results              | PostgreSQL 16         |
-| **nginx**  | Reverse proxy, serves static frontend, routes `/api/*` to API   | nginx 1.27            |
-| **frontend** | Single-page dashboard showing anomaly table with filters       | Vanilla HTML/JS       |
-| **prometheus** | Metrics collection and alert evaluation                      | Prometheus            |
-| **grafana** | Dashboards, log viewer, alert visualization                     | Grafana               |
-| **loki**   | Log aggregation from all containers                              | Loki                  |
-
 ### Design Decisions
 
-- **FastAPI** over Flask: automatic OpenAPI docs, async support, Pydantic validation, and dependency injection for DB sessions.
-- **SQLAlchemy Core `insert().returning()`**: true batch inserts with ID retrieval in a single roundtrip, efficient for >10k records.
-- **Background anomaly detection**: CSV upload returns immediately after ingestion; anomaly detection runs as a `BackgroundTask`. This means the ingest response reports `processing: true` with `anomalies_detected: 0` — anomalies appear after a short delay.
-- **Rolling-window z-score detection with historical context**: the anomaly detector fetches the prior `ROLLING_WINDOW_SIZE` (default 20) readings per sensor from the database before processing a new batch. This ensures rolling statistics are correct across ingest boundaries. Only newly ingested readings are evaluated for anomalies. Confidence score = |z-score|.
-- **Idempotent anomaly writes**: a unique constraint on `(sensor_data_id, anomaly_type)` prevents duplicate anomaly records if detection runs more than once on the same data. PostgreSQL uses `ON CONFLICT DO NOTHING`; SQLite falls back to a check-before-insert pattern.
-- **Alembic migrations**: schema changes are tracked and applied automatically on startup, instead of `create_all()`.
-- **nginx as reverse proxy**: single entry point, serves static files directly, strips `/api/` prefix and forwards to FastAPI. `root_path` ensures OpenAPI docs work correctly through the proxy at `/api/docs`.
-- **Docker Compose with named volumes**: `pgdata` volume persists database across container restarts.
-- **All config via environment variables**: `docker-compose.yml` uses `${VAR:-default}` syntax for every setting. `root_path` and CORS origins are also configurable.
+- **FastAPI over Flask** — automatic OpenAPI docs, async support, Pydantic validation, and dependency injection for DB sessions.
+- **SQLAlchemy Core `insert().returning()`** — true batch inserts with ID retrieval in a single roundtrip, efficient for >10k records.
+- **Background anomaly detection** — CSV upload returns immediately; detection runs as a BackgroundTask. A ProcessingJob record tracks status so the frontend can poll for completion.
+- **Idempotent anomaly writes** — a unique constraint on `(sensor_data_id, anomaly_type)` prevents duplicate anomaly records. PostgreSQL uses `ON CONFLICT DO NOTHING`; SQLite falls back to check-before-insert.
+- **Alembic migrations** — schema changes are tracked and applied automatically on startup, not via `create_all()`.
+- **nginx path stripping** — the trailing slash in `proxy_pass http://api/` strips the `/api/` prefix. `root_path="/api"` keeps OpenAPI docs working through the proxy.
+- **Named volumes** — `pgdata` persists the database across container restarts.
+- **All config via environment variables** — `docker-compose.yml` uses `${VAR:-default}` for every setting. No `.env` file needed for local development.
+- **Self-hosted observability** — Prometheus + Grafana + Loki runs alongside the app with no external accounts or API keys. Dashboards and datasources are auto-provisioned.
 
 ### Operational Notes
 
-- **Processing latency**: after CSV upload, anomaly detection runs in a background thread. For 10k rows, this typically takes 1-2 seconds. The frontend waits 2 seconds after upload before refreshing anomaly data.
-- **Memory**: the current design reads the full CSV and all affected readings into memory. This handles tens of thousands of rows comfortably but would need streaming for millions.
-- **Test safety**: the test suite refuses to run against any PostgreSQL database whose name does not contain "test". This prevents accidental data loss when `DATABASE_URL` points to a real database.
+- **Processing latency** — for 10k rows, anomaly detection typically takes 1-2 seconds in the background thread.
+- **Memory** — the current design reads the full CSV into memory. Fine for tens of thousands of rows, but would need streaming for millions.
+- **Test safety** — the test suite refuses to run against any PostgreSQL database whose name does not contain "test".
 
 ## Quick Start
 
