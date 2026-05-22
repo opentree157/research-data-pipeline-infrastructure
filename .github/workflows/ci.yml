@@ -1,4 +1,4 @@
-name: Research Data Pipeline CI
+name: Build and Deploy
 
 on:
   push:
