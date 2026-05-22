@@ -64,6 +64,10 @@
     .page-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; cursor: default; }
     .page-btn:disabled { opacity: 0.4; cursor: default; }
     .page-ellipsis { padding: 0.35rem 0.25rem; font-size: 0.85rem; color: #9ca3af; }
+    .page-jump { display: flex; align-items: center; gap: 0.35rem; margin-left: 0.5rem; font-size: 0.85rem; color: #64748b; }
+    .page-jump input { width: 3.5rem; padding: 0.3rem 0.4rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.85rem; text-align: center; }
+    .page-jump button { padding: 0.3rem 0.6rem; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; font-size: 0.85rem; cursor: pointer; }
+    .page-jump button:hover { background: #f3f4f6; }
 
     .loading-overlay { position: relative; }
     .loading-overlay.loading tbody { opacity: 0.4; pointer-events: none; }
@@ -94,8 +98,8 @@
 
   <div class="container">
     <div class="upload-area">
-      <input type="file" id="csvFile" accept=".csv">
-      <button class="btn-upload" onclick="uploadCSV()">Upload CSV</button>
+      <input type="file" id="csvFile" accept=".csv" hidden>
+      <button class="btn-upload" onclick="document.getElementById('csvFile').click()">Upload CSV</button>
       <span id="uploadMsg" class="upload-msg"></span>
     </div>
 
@@ -470,6 +474,31 @@ function updatePagination() {
   next.disabled = currentPage === totalPages;
   next.addEventListener('click', () => goToPage(currentPage + 1));
   bar.appendChild(next);
+
+  if (totalPages > 7) {
+    const jump = document.createElement('span');
+    jump.className = 'page-jump';
+    const label = document.createTextNode('Page ');
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = 1;
+    input.max = totalPages;
+    input.placeholder = currentPage;
+    const ofLabel = document.createTextNode(' of ' + totalPages + ' ');
+    const go = document.createElement('button');
+    go.textContent = 'Go';
+    const jumpToInput = () => {
+      const p = parseInt(input.value);
+      if (p >= 1 && p <= totalPages) goToPage(p);
+    };
+    go.addEventListener('click', jumpToInput);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') jumpToInput(); });
+    jump.appendChild(label);
+    jump.appendChild(input);
+    jump.appendChild(ofLabel);
+    jump.appendChild(go);
+    bar.appendChild(jump);
+  }
 }
 
 function getPageNumbers(current, total) {
@@ -509,6 +538,7 @@ async function uploadCSV() {
   msg.textContent = 'Uploading...'; msg.className = 'upload-msg';
   const form = new FormData();
   form.append('file', fileInput.files[0]);
+  fileInput.value = '';
 
   try {
     const r = await fetch('/api/ingest', { method: 'POST', body: form });
@@ -553,6 +583,8 @@ function pollJob(jobId) {
     } catch { clearInterval(interval); }
   }, 1000);
 }
+
+document.getElementById('csvFile').addEventListener('change', uploadCSV);
 
 buildHeaders();
 checkHealth();

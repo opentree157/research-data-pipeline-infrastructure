@@ -24,69 +24,39 @@ SPIKE_Z_THRESHOLD = 5.0
 DRIFT_WINDOW = 5
 
 
-def _classify_anomaly(
-    sensor_df: pd.DataFrame,
-    idx: int,
-    metric: str,
-    z: float,
-    value: float,
-) -> str:
-    if value in SENSOR_FAILURE_VALUES:
-        return "sensor_failure"
-
-    if abs(z) >= SPIKE_Z_THRESHOLD:
-        return "spike"
-
-    start = max(0, idx - DRIFT_WINDOW)
-    window = sensor_df.iloc[start:idx + 1]
-    if len(window) >= DRIFT_WINDOW:
-        diffs = window[metric].diff().dropna()
-        if (diffs > 0).all() or (diffs < 0).all():
-            return "drift"
-
-    metric_anomalies = 0
-    for m in METRICS:
-        if m == metric:
-            continue
-        m_val = sensor_df.loc[idx, m]
-        if m_val in SENSOR_FAILURE_VALUES:
-            continue
-        m_mean = sensor_df[m].iloc[start:idx].mean() if idx > 0 else m_val
-        m_std = sensor_df[m].iloc[start:idx].std() if idx > 1 else 0
-        if m_std > 0 and abs(m_val - m_mean) > ANOMALY_THRESHOLD * m_std:
-            metric_anomalies += 1
-    if metric_anomalies >= 1:
-        return "noise_burst"
-
-    return "spike"
-
-
 def _fetch_with_history(
     db: Session, reading_ids: List[int]
 ) -> tuple[pd.DataFrame, set[int]]:
+    if not reading_ids:
+        return pd.DataFrame(), set()
+
+    min_id = min(reading_ids)
+    max_id = max(reading_ids)
+    new_id_set = set(reading_ids)
+
     new_readings = (
         db.query(SensorReading)
-        .filter(SensorReading.id.in_(reading_ids))
+        .filter(SensorReading.id.between(min_id, max_id))
         .all()
     )
+    new_readings = [r for r in new_readings if r.id in new_id_set]
+
     if not new_readings:
         return pd.DataFrame(), set()
 
-    new_id_set = set(reading_ids)
-    sensor_ids = {r.sensor_id for r in new_readings}
+    earliest_by_sensor = {}
+    for r in new_readings:
+        if r.sensor_id not in earliest_by_sensor or r.timestamp < earliest_by_sensor[r.sensor_id]:
+            earliest_by_sensor[r.sensor_id] = r.timestamp
 
     history = []
-    for sid in sensor_ids:
-        earliest_new = min(
-            r.timestamp for r in new_readings if r.sensor_id == sid
-        )
+    for sid, earliest in earliest_by_sensor.items():
         prior = (
             db.query(SensorReading)
             .filter(
                 and_(
                     SensorReading.sensor_id == sid,
-                    SensorReading.timestamp < earliest_new,
-                    ~SensorReading.id.in_(reading_ids),
+                    SensorReading.timestamp < earliest,
                 )
             )
             .order_by(SensorReading.timestamp.desc())
@@ -117,64 +87,85 @@ def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
         return 0
 
     anomaly_rows: list[dict] = []
+    now = datetime.now(timezone.utc)
 
     for sensor_id, sensor_df in df.groupby("sensor_id"):
         sensor_df = sensor_df.reset_index(drop=True)
+        is_new = sensor_df["id"].isin(new_id_set)
+
+        stats = {}
         for metric in METRICS:
-            rolling_mean = sensor_df[metric].rolling(
-                window=ROLLING_WINDOW_SIZE, min_periods=1
-            ).mean()
-            rolling_std = sensor_df[metric].rolling(
-                window=ROLLING_WINDOW_SIZE, min_periods=1
-            ).std()
+            rm = sensor_df[metric].rolling(window=ROLLING_WINDOW_SIZE, min_periods=1).mean()
+            rs = sensor_df[metric].rolling(window=ROLLING_WINDOW_SIZE, min_periods=1).std()
+            z = (sensor_df[metric] - rm) / rs
 
-            z_scores = (sensor_df[metric] - rolling_mean) / rolling_std
+            diffs = sensor_df[metric].diff()
+            drift_up = diffs.rolling(window=DRIFT_WINDOW, min_periods=DRIFT_WINDOW - 1).min() > 0
+            drift_down = diffs.rolling(window=DRIFT_WINDOW, min_periods=DRIFT_WINDOW - 1).max() < 0
 
-            for idx in sensor_df.index:
-                row_id = int(sensor_df.loc[idx, "id"])
-                if row_id not in new_id_set:
-                    continue
-                z = z_scores.loc[idx]
-                if pd.isna(z) or abs(z) <= ANOMALY_THRESHOLD:
-                    continue
+            stats[metric] = {
+                "mean": rm,
+                "std": rs,
+                "z": z,
+                "is_drift": drift_up | drift_down,
+            }
 
+        for metric in METRICS:
+            z_scores = stats[metric]["z"]
+            anomaly_mask = is_new & z_scores.notna() & (z_scores.abs() > ANOMALY_THRESHOLD)
+            anomaly_indices = sensor_df.index[anomaly_mask]
+
+            if anomaly_indices.empty:
+                continue
+
+            for idx in anomaly_indices:
                 value = float(sensor_df.loc[idx, metric])
-                mean_val = float(rolling_mean.loc[idx])
-                std_val = float(rolling_std.loc[idx])
-                category = _classify_anomaly(sensor_df, idx, metric, z, value)
+                z = float(z_scores.loc[idx])
+                mean_val = float(stats[metric]["mean"].loc[idx])
+                std_val = float(stats[metric]["std"].loc[idx])
+                row_id = int(sensor_df.loc[idx, "id"])
 
-                anomaly_rows.append(
-                    {
-                        "sensor_data_id": row_id,
-                        "anomaly_type": f"{metric}_anomaly",
-                        "category": category,
-                        "confidence_score": round(float(abs(z)), 4),
-                        "z_score": round(float(z), 4),
-                        "rolling_mean": round(mean_val, 4),
-                        "rolling_std": round(std_val, 4),
-                        "actual_value": round(value, 4),
-                        "detected_at": datetime.now(timezone.utc),
-                    }
-                )
+                if value in SENSOR_FAILURE_VALUES:
+                    category = "sensor_failure"
+                elif abs(z) >= SPIKE_Z_THRESHOLD:
+                    category = "spike"
+                elif stats[metric]["is_drift"].loc[idx]:
+                    category = "drift"
+                else:
+                    cross_anomalies = sum(
+                        1 for m in METRICS
+                        if m != metric
+                        and sensor_df.loc[idx, m] not in SENSOR_FAILURE_VALUES
+                        and pd.notna(stats[m]["z"].loc[idx])
+                        and abs(stats[m]["z"].loc[idx]) > ANOMALY_THRESHOLD
+                    )
+                    category = "noise_burst" if cross_anomalies >= 1 else "spike"
 
-                logger.warning(
-                    "Anomaly detected",
-                    extra={
-                        "sensor_id": sensor_id,
-                        "metric": metric,
-                        "category": category,
-                        "actual_value": round(value, 4),
-                        "rolling_mean": round(mean_val, 4),
-                        "rolling_std": round(std_val, 4),
-                        "z_score": round(float(z), 4),
-                        "std_deviations": round(float(abs(z)), 4),
-                        "reading_id": row_id,
-                    },
-                )
+                anomaly_rows.append({
+                    "sensor_data_id": row_id,
+                    "anomaly_type": f"{metric}_anomaly",
+                    "category": category,
+                    "confidence_score": round(abs(z), 4),
+                    "z_score": round(z, 4),
+                    "rolling_mean": round(mean_val, 4),
+                    "rolling_std": round(std_val, 4),
+                    "actual_value": round(value, 4),
+                    "detected_at": now,
+                })
 
     if not anomaly_rows:
         logger.info("Detected 0 anomalies in %d readings", len(new_id_set))
         return 0
+
+    categories = {}
+    for r in anomaly_rows:
+        categories[r["category"]] = categories.get(r["category"], 0) + 1
+    logger.info(
+        "Detected %d anomalies in %d readings",
+        len(anomaly_rows),
+        len(new_id_set),
+        extra={"categories": categories},
+    )
 
     dialect = db.bind.dialect.name if db.bind else "default"
     if dialect == "postgresql":
@@ -198,13 +189,4 @@ def detect_anomalies(db: Session, reading_ids: List[int]) -> int:
                 db.add(Anomaly(**row))
     db.commit()
 
-    categories = {}
-    for r in anomaly_rows:
-        categories[r["category"]] = categories.get(r["category"], 0) + 1
-    logger.info(
-        "Detected %d anomalies in %d readings",
-        len(anomaly_rows),
-        len(new_id_set),
-        extra={"categories": categories},
-    )
     return len(anomaly_rows)
