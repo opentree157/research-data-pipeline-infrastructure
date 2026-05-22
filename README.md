@@ -58,10 +58,10 @@ curl "http://localhost:8080/api/anomalies?limit=10"
 curl "http://localhost:8080/api/anomalies?sensor_id=TEMP_001&start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z"
 
 # List sensors
-curl http://localhost:8080/api/sensors
+curl "http://localhost:8080/api/sensors"
 
 # Health check
-curl http://localhost:8080/api/health
+curl "http://localhost:8080/api/health"
 ```
 
 ### 6. Stop the stack
