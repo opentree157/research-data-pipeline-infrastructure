@@ -201,6 +201,54 @@ Interactive API docs (Swagger UI) are available at **http://localhost:8080/api/d
 
 **Processing jobs**: `POST /api/ingest` returns a `job_id`. Poll `GET /api/jobs/{id}` to check status (`pending`, `completed`, `failed`). On completion, `anomalies_found` contains the count. On failure, `error` contains the traceback. The frontend polls automatically and shows the result.
 
+### Querying Anomalies
+
+The `/api/anomalies` endpoint is the main query interface. All parameters are optional and can be combined freely.
+
+**Filtering:**
+
+| Param | Description | Example |
+|-------|-------------|---------|
+| `sensor_id` | Filter by sensor | `TEMP_001` |
+| `location` | Filter by location | `lab_a` |
+| `anomaly_type` | Filter by metric | `temperature_anomaly`, `humidity_anomaly`, `pressure_anomaly` |
+| `category` | Filter by classification | `spike`, `drift`, `sensor_failure`, `noise_burst` |
+| `start` | Start of time range (ISO 8601) | `2024-01-01T00:00:00Z` |
+| `end` | End of time range (ISO 8601) | `2024-01-02T00:00:00Z` |
+
+**Sorting:**
+
+| Param | Description | Values |
+|-------|-------------|--------|
+| `sort_by` | Column to sort on | `timestamp`, `sensor_id`, `location`, `anomaly_type`, `category`, `temperature`, `humidity`, `pressure`, `confidence_score` |
+| `sort_dir` | Sort direction | `asc` (default), `desc` |
+
+**Pagination:**
+
+| Param | Description | Default |
+|-------|-------------|---------|
+| `limit` | Results per page (1–1000) | `100` |
+| `offset` | Number of results to skip | `0` |
+
+**Examples:**
+
+```bash
+# All anomalies, default pagination
+curl "http://localhost:8080/api/anomalies"
+
+# Anomalies for a specific sensor
+curl "http://localhost:8080/api/anomalies?sensor_id=TEMP_001"
+
+# Anomalies in a date range
+curl "http://localhost:8080/api/anomalies?start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z"
+
+# Spikes in lab_a, sorted by confidence descending
+curl "http://localhost:8080/api/anomalies?category=spike&location=lab_a&sort_by=confidence_score&sort_dir=desc"
+
+# Pressure anomalies from TEMP_001, page 2
+curl "http://localhost:8080/api/anomalies?anomaly_type=pressure_anomaly&sensor_id=TEMP_001&limit=50&offset=50"
+```
+
 ## Running Tests
 
 ```bash
