@@ -7,6 +7,8 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
+from pythonjsonlogger.json import JsonFormatter as JsonFormatter
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
@@ -24,7 +26,13 @@ from schemas import (
     SensorReadingOut,
 )
 
-logging.basicConfig(level=logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter(
+    fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
+    rename_fields={"asctime": "timestamp", "levelname": "level"},
+))
+logging.root.handlers = [handler]
+logging.root.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +64,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+Instrumentator(
+    excluded_handlers=["/metrics"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
 
 def _run_detection(job_id: int, reading_ids: list[int]):
     db = SessionLocal()
@@ -66,6 +78,7 @@ def _run_detection(job_id: int, reading_ids: list[int]):
         job.anomalies_found = count
         job.completed_at = datetime.now(timezone.utc)
         db.commit()
+        logger.info("Anomaly detection completed", extra={"job_id": job_id, "anomalies_found": count})
     except Exception:
         logger.exception("Anomaly detection failed for job %d", job_id)
         try:
@@ -124,6 +137,7 @@ async def ingest_data(
     db.refresh(job)
 
     background_tasks.add_task(_run_detection, job.id, reading_ids)
+    logger.info("CSV ingested", extra={"readings": len(reading_ids), "job_id": job.id})
     return IngestResponse(readings_ingested=len(reading_ids), job_id=job.id)
 
 

@@ -13,7 +13,20 @@ A scalable research data processing pipeline that ingests sensor data, detects a
                                                  ┌───────▼──────────┐
                                                  │ PostgreSQL :5432 │
                                                  │   (sensor_data)  │
-                                                 └──────────────────┘
+                                                 └────────┬─────────┘
+                                                          │
+┌───────────────────── Observability ─────────────────────┤
+│                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┤
+│  │ Grafana :3000│◀───│  Prometheus  │◀───│   Exporters  │
+│  │ (dashboards) │    │    :9090     │    │ (pg, nginx)  │
+│  │              │◀───│              │    └──────────────┘
+│  │              │    └──────────────┘
+│  │              │◀───┌──────────────┐    ┌───────────────┐
+│  │              │    │  Loki :3100  │◀───│   Promtail    │
+│  └──────────────┘    │    (logs)    │    │ (Docker logs) │
+│                      └──────────────┘    └───────────────┘
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Components:**
@@ -24,6 +37,9 @@ A scalable research data processing pipeline that ingests sensor data, detects a
 | **db**     | Persistent storage for readings and anomaly results              | PostgreSQL 16         |
 | **nginx**  | Reverse proxy, serves static frontend, routes `/api/*` to API   | nginx 1.27            |
 | **frontend** | Single-page dashboard showing anomaly table with filters       | Vanilla HTML/JS       |
+| **prometheus** | Metrics collection and alert evaluation                      | Prometheus            |
+| **grafana** | Dashboards, log viewer, alert visualization                     | Grafana               |
+| **loki**   | Log aggregation from all containers                              | Loki                  |
 
 ### Design Decisions
 
@@ -58,15 +74,25 @@ docker compose up -d --build
 
 All configuration has sensible defaults in `docker-compose.yml`. No `.env` file is required for local development.
 
-The dashboard will be available at **http://localhost:8080**.
+- **Dashboard**: http://localhost:8080
+- **Grafana** (monitoring): http://localhost:3000 (admin / admin)
+- **API docs**: http://localhost:8080/api/docs
 
-### 2. Generate test data
+### 2. Set up Python environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r api/requirements.txt -r tests/requirements-test.txt
+```
+
+### 3. Generate test data
 
 ```bash
 python3 2_generate_data.py -n 10000 -o sample_data.csv --seed 42
 ```
 
-### 3. Ingest data
+### 4. Ingest data
 
 **Option A** — via the web dashboard: click "Upload CSV" and select `sample_data.csv`.
 
@@ -79,7 +105,7 @@ curl -X POST http://localhost:8080/api/ingest \
 
 The response returns immediately with the number of ingested readings. Anomaly detection runs in the background.
 
-### 4. Query anomalies
+### 5. Query anomalies
 
 ```bash
 # All anomalies (paginated)
@@ -95,7 +121,7 @@ curl http://localhost:8080/api/sensors
 curl http://localhost:8080/api/health
 ```
 
-### 5. Stop the stack
+### 6. Stop the stack
 
 ```bash
 docker compose down        # stop containers, keep data
@@ -187,6 +213,17 @@ Without these, the test and build jobs run normally and the deploy job is skippe
 │   ├── outputs.tf          # Public IP, dashboard URL, SSH command
 │   ├── cloud-init.yml      # Bootstraps Docker and starts the stack on first boot
 │   └── terraform.tfvars.example
+├── monitoring/
+│   ├── prometheus/
+│   │   ├── prometheus.yml  # Scrape config (API, PostgreSQL, nginx)
+│   │   └── alerts.yml      # Alert rules (error rate, latency, downtime)
+│   ├── grafana/
+│   │   ├── provisioning/   # Auto-configured datasources (Prometheus, Loki)
+│   │   └── dashboards/     # Pre-built Pipeline Overview dashboard
+│   ├── loki/
+│   │   └── loki-config.yml # Log aggregation config (7-day retention)
+│   └── promtail/
+│       └── promtail-config.yml  # Docker log collection via socket
 ├── .github/workflows/
 │   └── ci.yml              # CI/CD pipeline (test → build → deploy)
 ├── docker-compose.yml      # Local development orchestration (bind mounts)
@@ -195,6 +232,55 @@ Without these, the test and build jobs run normally and the deploy job is skippe
 ├── 3_anomaly_detector.py   # Reference detector (provided)
 └── DATA_GENERATOR_GUIDE.md # Data generator docs (provided)
 ```
+
+## Observability
+
+The stack includes full observability out of the box: metrics, logs, and alerting — all self-hosted, no external accounts needed.
+
+### Components
+
+| Service               | Role                                          | Port  |
+|-----------------------|-----------------------------------------------|-------|
+| **Prometheus**        | Scrapes metrics from API, PostgreSQL, nginx   | 9090  |
+| **Grafana**           | Dashboards and alert visualization            | 3000  |
+| **Loki**              | Log aggregation from all containers           | 3100  |
+| **Promtail**          | Ships Docker container logs to Loki           | -     |
+| **postgres-exporter** | Exposes PostgreSQL metrics to Prometheus       | -     |
+| **nginx-exporter**    | Exposes nginx metrics to Prometheus            | -     |
+
+### Dashboards
+
+Grafana is available at **http://localhost:3000** (default login: `admin` / `admin`).
+
+A **Pipeline Overview** dashboard is pre-provisioned with:
+- Request rate and error rate (5xx) over time
+- Latency percentiles (p50 / p95 / p99)
+- Requests in progress
+- PostgreSQL connection count and row estimates
+- Response status code distribution
+- Request rate by endpoint
+- Live application logs (via Loki)
+
+### Alerts
+
+Prometheus alert rules fire on:
+- **HighErrorRate** — >5% of requests returning 5xx for 2 minutes
+- **HighLatency** — p95 latency above 2s for 5 minutes
+- **APIDown** — FastAPI metrics endpoint unreachable for 1 minute
+- **PostgreSQLDown** — PostgreSQL exporter unreachable for 1 minute
+- **HighDatabaseConnections** — >80 active connections for 5 minutes
+- **NginxDown** — nginx exporter unreachable for 1 minute
+
+Alerts appear in Grafana's Alerting UI. To receive notifications (email, Slack, PagerDuty), configure a contact point in Grafana under Alerting > Contact points.
+
+### Structured Logging
+
+The API emits JSON-structured logs with `timestamp`, `level`, `name`, and `message` fields. Key events logged:
+- CSV ingestion (readings count, job ID)
+- Anomaly detection completion (job ID, anomalies found)
+- Anomaly detection failures (with traceback)
+
+Logs from all containers are collected by Promtail and queryable in Grafana via the Loki datasource.
 
 ## Cloud Deployment (AWS)
 
@@ -253,3 +339,7 @@ ssh user@host "cd /opt/pipeline && \
 | `ANOMALY_THRESHOLD`  | `2.0`                  | Z-score threshold for anomalies      |
 | `API_ROOT_PATH`      | `/api`                 | FastAPI root path (for reverse proxy)|
 | `ALLOWED_ORIGINS`    | `*`                    | CORS allowed origins (comma-separated)|
+| `PROMETHEUS_PORT`    | `9090`                 | Exposed Prometheus port              |
+| `GRAFANA_PORT`       | `3000`                 | Exposed Grafana port                 |
+| `GRAFANA_USER`       | `admin`                | Grafana admin username               |
+| `GRAFANA_PASSWORD`   | `admin`                | Grafana admin password               |

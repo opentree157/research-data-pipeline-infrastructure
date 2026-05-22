@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: Research Data Pipeline CI
 
 on:
   push:
