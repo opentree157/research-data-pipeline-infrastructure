@@ -26,27 +26,33 @@ from schemas import (
     SensorReadingOut,
 )
 
-handler = logging.StreamHandler()
-handler.setFormatter(JsonFormatter(
-    fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
-    rename_fields={"asctime": "timestamp", "levelname": "level"},
-))
-logging.root.handlers = [handler]
-logging.root.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging():
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter(
+        fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
+        rename_fields={"asctime": "timestamp", "levelname": "level"},
+    ))
+    for name in ("main", "ingest", "anomaly_detector"):
+        lg = logging.getLogger(name)
+        lg.disabled = False
+        lg.handlers = [handler]
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if os.environ.get("TESTING"):
-        yield
-        return
-    from alembic import command
-    from alembic.config import Config
+    if not os.environ.get("TESTING"):
+        from alembic import command
+        from alembic.config import Config
 
-    alembic_cfg = Config("alembic.ini")
-    command.upgrade(alembic_cfg, "head")
-    logger.info("Database migrations applied")
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+    _configure_logging()
+    logger.info("Application started")
     yield
 
 
