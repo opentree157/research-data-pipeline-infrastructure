@@ -414,10 +414,10 @@ Logs from all containers are collected by Promtail and queryable in Grafana via 
 
 1. In Grafana, go to Explore → select the Loki datasource.
 2. Use LogQL queries to find specific events:
-   - All API logs: `{container_name=~".*api.*"}`
-   - Anomaly detection results: `{container_name=~".*api.*"} |= "Detected" | json`
-   - Errors only: `{container_name=~".*api.*"} | json | level="ERROR"`
-   - Logs for a specific job: `{container_name=~".*api.*"} |= "job_id" | json | job_id=5`
+   - All API logs: `{container=~".*api.*"}`
+   - Anomaly detection results: `{container=~".*api.*"} |= "Detected" | json`
+   - Errors only: `{container=~".*api.*"} | json | level="ERROR"`
+   - Logs for a specific job: `{container=~".*api.*"} |= "job_id" | json | job_id=5`
 
 **Check alert status:**
 
